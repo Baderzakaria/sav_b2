@@ -24,9 +24,12 @@ def worker_node(state: State) -> Dict[str, Any]:
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
     prompt = (
-        "Analyze the sentiment of the following tweet. Return only JSON with key "
-        "'sentiment' (positive/neutral/negative).\n\nTweet:\n" + text_value
+        "Determine if the following tweet reports an issue or problem that might require attention. "
+        "Return only JSON with a single key '' and value 'problem', 'not_problem', or 'unclear'. "
+        "Consider context such as complaints, incidents, service disruptions, or requests for help.\n\n"
+        "Tweet:\n" + text_value
     )
+
     
     model_output = call_native_generate(ollama_host, model_name, prompt)
     return {"result": model_output}
@@ -49,7 +52,7 @@ def main() -> None:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader):
             rows.append(row)
-            if i + 1 >= 10:
+            if i + 1 >= 20:
                 break
 
     graph = build_graph()
@@ -62,7 +65,7 @@ def main() -> None:
             text_value = row.get("full_text", " ".join(str(v) for v in row.values() if v))
             out_state = graph.invoke({"row": row, "model_name": model_name})
             row_time = time.time() - row_start
-            print(f"[{idx}] ({row_time:.2f}s) Tweet: {text_value[:100]}{'...' if len(text_value) > 100 else ''}")
+            print(f"[{idx}] ({row_time:.2f}s) Tweet: {text_value[:1000]}{'...' if len(text_value) > 1000 else ''}")
             print(f"     Result: {out_state.get('result', '')}\n")
         total_time = time.time() - total_start
         print(f"Total: {total_time:.2f}s | Average: {total_time/len(rows):.2f}s per row\n")
