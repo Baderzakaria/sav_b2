@@ -1,0 +1,77 @@
+{
+  "version": "freemind_prompts_v0.2",
+  "global": {
+    "system_header": "JSON strict uniquement. N'édite jamais le full_text. Utilise le contexte (ctx_before/ctx_after/ctx_refs) pour comprendre sans modifier.",
+    "placeholders": {
+      "full_text": "{{full_text}}",
+      "ctx_before": "{{ctx_before}}",
+      "ctx_after": "{{ctx_after}}",
+      "ctx_refs": "{{ctx_refs}}"
+    },
+    "output_schema": {
+      "utile": { "type": "boolean" },
+      "categorie": { "type": "string", "enum": ["probleme", "question", "retour_client"] },
+      "sentiment": { "type": "string" },
+      "type_probleme": { "type": "string", "enum": ["panne", "facturation", "abonnement", "resiliation", "information", "autre"] },
+      "score_gravite": { "type": "integer", "minimum": -10, "maximum": 10 }
+    }
+  },
+  "taxonomy": {
+    "sentiment": {
+      "description": "Échelle à 10 options avec gravité associée (-10 à +10). Négatif → gravité positive (urgence), Positif → gravité négative (satisfaction).",
+      "options": [
+        { "label": "outrage_critique", "polarity": "negatif", "base_gravity": 9, "allowed_range": [7, 10], "note": "Colère extrême, menaces, coupure généralisée, langage violent." },
+        { "label": "tres_negatif", "polarity": "negatif", "base_gravity": 7, "allowed_range": [5, 9], "note": "Réclamation sévère, forte insatisfaction, multiples échecs." },
+        { "label": "negatif", "polarity": "negatif", "base_gravity": 5, "allowed_range": [3, 7], "note": "Plainte claire, dysfonctionnement isolé." },
+        { "label": "mecontent", "polarity": "negatif", "base_gravity": 4, "allowed_range": [2, 6], "note": "Mécontentement / irritation, impact modéré." },
+        { "label": "legerement_negatif", "polarity": "negatif", "base_gravity": 2, "allowed_range": [1, 4], "note": "Gêne mineure, ton poli." },
+        { "label": "neutre", "polarity": "neutre", "base_gravity": 0, "allowed_range": [-1, 1], "note": "Information / question factuelle, aucun affect." },
+        { "label": "legerement_positif", "polarity": "positif", "base_gravity": -2, "allowed_range": [-4, -1], "note": "Ton globalement positif, remerciement léger." },
+        { "label": "positif", "polarity": "positif", "base_gravity": -4, "allowed_range": [-6, -2], "note": "Satisfaction claire, félicitations." },
+        { "label": "tres_positif", "polarity": "positif", "base_gravity": -6, "allowed_range": [-8, -4], "note": "Éloge appuyé, succès marqué." },
+        { "label": "mixte", "polarity": "mixte", "base_gravity": 0, "allowed_range": [-3, 3], "note": "Positif et négatif coexistent; utiliser le contexte pour trancher." }
+      ]
+    }
+  },
+  "agents": {
+    "A1_utile": {
+      "version": "v0.2",
+      "options": [true, false],
+      "prompt_template": "SYSTEM: JSON strict uniquement. USER: Texte (ne pas modifier): {{full_text}} Contexte: avant={{ctx_before}} après={{ctx_after}} refs={{ctx_refs}}\nTâche: Déterminer si le tweet est pertinent pour le SAV (exclure pubs/spam/hors sujet).\nRetourne: {\"utile\": true|false}"
+    },
+    "A2_categorie": {
+      "version": "v0.2",
+      "options": ["probleme", "question", "retour_client"],
+      "prompt_template": "SYSTEM: JSON strict. USER: Texte: {{full_text}} Contexte: avant={{ctx_before}} après={{ctx_after}} refs={{ctx_refs}}\nTâche: \"categorie\" ∈ {\"probleme\",\"question\",\"retour_client\"}.\nRetourne: {\"categorie\":\"...\"}"
+    },
+    "A3_sentiment": {
+      "version": "v0.2",
+      "options_ref": "taxonomy.sentiment.options[*].label",
+      "prompt_template": "SYSTEM: JSON strict. USER: Texte: {{full_text}} Contexte: avant={{ctx_before}} après={{ctx_after}} refs={{ctx_refs}}\nTâche: Classer le \"sentiment\" selon l'échelle à 10 options fournie.\nRetourne: {\"sentiment\":\"<label>\"}",
+      "gravity_hint": "Utiliser base_gravity comme point de départ pour A5."
+    },
+    "A4_type_probleme": {
+      "version": "v0.2",
+      "options": ["panne", "facturation", "abonnement", "resiliation", "information", "autre"],
+      "prompt_template": "SYSTEM: JSON strict. USER: Texte: {{full_text}} Contexte: avant={{ctx_before}} après={{ctx_after}} refs={{ctx_refs}}\nTâche: \"type_probleme\" ∈ {\"panne\",\"facturation\",\"abonnement\",\"resiliation\",\"information\",\"autre\"}.\nRetourne: {\"type_probleme\":\"...\"}"
+    },
+    "A5_gravite": {
+      "version": "v0.2",
+      "range": [-10, 10],
+      "depends_on": ["A1_utile", "A2_categorie", "A3_sentiment", "A4_type_probleme"],
+      "prompt_template": "SYSTEM: JSON strict. USER: Texte: {{full_text}} Contexte: avant={{ctx_before}} après={{ctx_after}} refs={{ctx_refs}}\nTâche: Attribuer \"score_gravite\" ∈ [-10,10] corrélé au sentiment et à la catégorie.\nRègles: si utile=false ⇒ score=0. Sentiment négatif ⇒ score≥1; positif ⇒ score≤-1; neutre ⇒ proche de 0. Renforcer si incident collectif/urgence.\nRetourne: {\"score_gravite\": <int>}"
+    },
+    "Checker_A2A": {
+      "version": "v0.2",
+      "rules": [
+        "utile=false ⇒ categorie='retour_client', type_probleme='autre', score_gravite=0",
+        "categorie='probleme' & sentiment ∈ {legerement_positif, positif, tres_positif} ⇒ warn",
+        "sentiment='outrage_critique' & score_gravite<7 ⇒ corriger à ≥7",
+        "contexte mentionne panne/incident & type_probleme!='panne' ⇒ warn/corriger"
+      ],
+      "prompt_template": "SYSTEM: JSON strict. USER: Entrées: A1..A5 + contexte. Valider la cohérence, appliquer corrections conservatrices (clamp gravité, type=panne si incident explicite). Retourner: {\"final\":{...},\"checker_status\":\"ok|warn|fail\",\"a2a_trace\":{...}}"
+    }
+  }
+}
+
+

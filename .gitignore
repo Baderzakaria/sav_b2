@@ -166,3 +166,6 @@ secrets/
 *.key
 config.local.*
 
+# Project plans (ignored)
+plans/
+

@@ -1,0 +1,11 @@
+full_text,categorie,sentiment,type_probleme,score_gravite,emotion_primary,sarcasm,tone_color,checker_status
+"💩 à @free parce-que Débit Très instable, … \n\nFree en France: vitesse, performances, pannes et commentaires des utilisateurs\n👉 https://t.co/Yab5ES2gLh\n\n#fing #internet #Free\n\nvia @fingapp @outagedetect",retour_client,neutre,autre,0,,,,ok
+"RT @free: Retrouvez désormais @ToonamiFR, la chaîne pour tous les fans de super-héros sur le canal 82 ! https://t.co/kuAYafYDiT",retour_client,legerement_positif,autre,-1,,,,ok
+"RT @free: Retrouvez désormais @ToonamiFR, la chaîne pour tous les fans de super-héros sur le canal 82 ! https://t.co/kuAYafYDiT",retour_client,legerement_positif,autre,-1,,,,ok
+"RT @free: A suivre ce soir, le 1er match de l’UEFA EURO 2020™ en #4K sur votre Freebox avec TF1 4K ! 🇹🇷⚽️🇮🇹 #EURO2020 https://t.co/gMTcYtGd…",retour_client,legerement_positif,autre,-1,,,,ok
+"« Faites vos premiers pas avec nous ! Découvrez votre nouveau site d'assistance Freebox et Mobile, sur https://t.co/yw1XX4zeSx 🚀 https://t.co/YCMv79evbM",retour_client,neutre,autre,0,,,,ok
+"RT @free: [NOUVEAU]\nAbonnés Freebox Pop, pour bien commencer la rentrée, CANAL+SÉRIES vous est offert pendant 1 an ! 😍😎@canalplus https://t…",retour_client,neutre,autre,0,,,,ok
+"RT @free: Vous allez commencer le match avec 15 min de retard ?  Pas de soucis avec la fonction Start-over, maintenant disponible sur Freeb…",retour_client,negatif,autre,3,colere,1,rouge,ok
+"RT @free: L'application Freebox Home est maintenant disponible en version officielle pour Android &amp; iOS. 📲\nPour la télécharger, c'est ici➡️…",retour_client,legerement_positif,autre,-1,,,,ok
+"Un incident sur nos fibres engendre des perturbations de service sur une partie des départements du Lot (46) et de l'Aveyron (12).\nDes investigations sont en cours, merci de votre patience.",probleme,negatif,panne,3,,,,ok
+"RT @Free_1337: Un incident sur nos fibres engendre des perturbations de service sur une partie des départements du Lot (46) et de l'Aveyron…",retour_client,neutre,panne,0,,,,ok
