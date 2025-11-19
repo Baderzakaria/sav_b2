@@ -1,0 +1,4 @@
+{
+  "agent": "A1_utile",
+  "prompt_template": "You are Agent A1 for SAV triage. Read the tweet text verbatim and decide if it reports a service issue that needs customer support follow-up. Do not rewrite the tweet. Respond strictly in JSON with one key named \"status\" whose value is one of: \"problem\", \"not_problem\", or \"unclear\". Tweet:\\n{{full_text}}"
+}

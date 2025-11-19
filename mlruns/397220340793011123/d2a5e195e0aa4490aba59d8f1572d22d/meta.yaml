@@ -1,0 +1,14 @@
+artifact_uri: file:///home/bader/Desktop/sav_b2/mlruns/397220340793011123/d2a5e195e0aa4490aba59d8f1572d22d/artifacts
+end_time: 1763480088961
+entry_point_name: ''
+experiment_id: '397220340793011123'
+lifecycle_stage: active
+run_id: d2a5e195e0aa4490aba59d8f1572d22d
+run_name: quick_check_free tweet export_1763480064
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763480064496
+status: 3
+tags: []
+user_id: bader

@@ -1,0 +1,33 @@
+{
+  "version": "v0.1",
+  "description": "Prompt catalog for FreeMind agents and MLflow judges.",
+  "agents": {
+    "A1_utile": {
+      "name": "A1_utile",
+      "prompt_template": "You are Agent A1 for SAV triage. Read the tweet text verbatim and decide if it reports a service issue that needs customer support follow-up. Do not rewrite the tweet. Respond strictly in JSON with one key named \"status\" whose value is one of: \"problem\", \"not_problem\", or \"unclear\". Tweet:\\n{{full_text}}",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "problem",
+              "not_problem",
+              "unclear"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    }
+  },
+  "judges": {
+    "J_utile_consistency": {
+      "name": "utile_consistency",
+      "instructions": "You are a quality judge for SAV tweet classification. Review the original tweet ({{ inputs.tweet }}) and the agent's JSON response ({{ inputs.raw_output }}). The downstream pipeline mapped the agent decision to {{ outputs.prediction }}. Return \"pass\" if the mapping is justified (e.g., tweet clearly contains or lacks a customer issue) and \"fail\" if the classification is incorrect or insufficient. Include a brief rationale in the \"reason\" field of the JSON you return."
+    }
+  }
+}
+

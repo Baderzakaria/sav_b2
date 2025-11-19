@@ -5,18 +5,25 @@ import re
 import json
 import os
 import time
+from pathlib import Path
 from typing import TypedDict, Dict, Any, Optional, List
 
+import mlflow
+import mlflow.langchain
 from langgraph.graph import StateGraph, START, END
 from utils_runtime import call_native_generate
+from judges.mlflow_judge import run_judge_on_log
 
 
 # Configuration variables (edit as needed)
 INPUT_CSV = os.path.join("data", "free tweet export.csv")
 OUTPUT_CSV: Optional[str] = None  # None => will default under RESULTS_DIR
+LOG_CSV: Optional[str] = None     # None => will default under RESULTS_DIR
 RESULTS_DIR = os.path.join("data", "results")
-MAX_ROWS: int = 20
+MAX_ROWS: int = 100
 MODELS: List[str] = ["llama3.2:3b"]
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns")
+MLFLOW_EXPERIMENT = os.environ.get("MLFLOW_EXPERIMENT", "freemind_quick_check")
 
 
 class State(TypedDict):
@@ -84,12 +91,17 @@ def get_text(row: Dict[str, Any]) -> str:
     return row.get("full_text", " ".join(str(v) for v in row.values() if v))
 
 
-def load_prompt_template() -> Optional[str]:
+def load_prompt_template(agent_key: str = "A1_utile") -> Optional[str]:
+    """Load a prompt template for the specified agent from JSON config."""
     try:
         with open(os.path.join("prompts", "freemind_prompts.json"), "r", encoding="utf-8") as f:
             cfg = json.load(f)
-            t = cfg.get("a1_problem_detection", {}).get("prompt_template")
-            return t if isinstance(t, str) and t.strip() else None
+            template = (
+                cfg.get("agents", {})
+                .get(agent_key, {})
+                .get("prompt_template")
+            )
+            return template.strip() if isinstance(template, str) and template.strip() else None
     except Exception:
         return None
 
@@ -127,6 +139,7 @@ def build_graph():
 def run_quick_check(
     input_csv: str,
     output_csv: Optional[str],
+    log_csv: Optional[str],
     max_rows: int,
     models: List[str],
 ) -> List[Dict[str, Any]]:
@@ -140,63 +153,140 @@ def run_quick_check(
             if max_rows and i + 1 >= max_rows:
                 break
 
+    if not rows:
+        return []
+
+    base_name = os.path.splitext(os.path.basename(input_csv))[0]
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+    mlflow.langchain.autolog()
+    run_name = f"quick_check_{base_name}_{int(time.time())}"
+
     graph = build_graph()
-    prompt_template = load_prompt_template()
+    prompt_template = load_prompt_template("A1_utile")
 
     # Prepare container for augmented rows (original row + single utile column)
     augmented_rows: list[Dict[str, Any]] = [dict(r) for r in rows]
+    log_entries: list[Dict[str, Any]] = []
     first_model = models[0] if models else ""
 
-    for model_name in models:
-        print(f"\n=== Model: {model_name} ===")
-        total_start = time.time()
-        for idx, row in enumerate(rows, start=1):
-            row_start = time.time()
-            text_value = get_text(row)
-            out_state = graph.invoke({
-                "row": row,
-                "model_name": model_name,
-                "text_value": text_value,
-                "prompt_template": prompt_template,
-            })
-            row_time = time.time() - row_start
-            extracted = _extract_single_value(out_state.get("result", ""))
-            utile_value = _map_to_utile(extracted)
-            if model_name == first_model and utile_value:
-                augmented_rows[idx - 1]["A1_utile"] = utile_value
+    with mlflow.start_run(run_name=run_name):
+        mlflow.log_param("input_csv", input_csv)
+        mlflow.log_param("max_rows", max_rows)
+        mlflow.log_param("models", ",".join(models))
 
-            print(f"[{idx}] ({row_time:.2f}s) Tweet: {text_value[:1000]}{'...' if len(text_value) > 1000 else ''}")
-            if model_name == first_model:
-                print(f"     Utile(A1): {utile_value}\n")
-            else:
-                print()
+        if prompt_template:
+            mlflow.log_dict(
+                {"agent": "A1_utile", "prompt_template": prompt_template},
+                artifact_file="prompts/A1_utile.json",
+            )
 
-        total_time = time.time() - total_start
-        print(f"Total: {total_time:.2f}s | Average: {total_time/len(rows):.2f}s per row\n")
+        for model_name in models:
+            print(f"\n=== Model: {model_name} ===")
+            total_start = time.time()
+            for idx, row in enumerate(rows, start=1):
+                row_start = time.time()
+                text_value = get_text(row)
+                out_state = graph.invoke({
+                    "row": row,
+                    "model_name": model_name,
+                    "text_value": text_value,
+                    "prompt_template": prompt_template,
+                })
+                row_time = time.time() - row_start
+                extracted = _extract_single_value(out_state.get("result", ""))
+                utile_value = _map_to_utile(extracted)
+                if model_name == first_model and utile_value:
+                    augmented_rows[idx - 1]["A1_utile"] = utile_value
 
-    # Resolve default output path if not provided (place under RESULTS_DIR)
-    if not output_csv:
-        base_name = os.path.splitext(os.path.basename(input_csv))[0]
-        output_csv = os.path.join(RESULTS_DIR, f"{base_name}_results.csv")
+                print(f"[{idx}] ({row_time:.2f}s) Tweet: {text_value[:1000]}{'...' if len(text_value) > 1000 else ''}")
+                if model_name == first_model:
+                    print(f"     Utile(A1): {utile_value}\n")
+                else:
+                    print()
 
-    # Export
-    out_dir = os.path.dirname(output_csv)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
+                log_entries.append({
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "model": model_name,
+                    "row_index": idx,
+                    "tweet_id": row.get("id"),
+                    "screen_name": row.get("screen_name"),
+                    "elapsed_sec": f"{row_time:.3f}",
+                    "raw_output": out_state.get("result", ""),
+                    "extracted_value": extracted,
+                    "mapped_utile": utile_value if utile_value else "",
+                    "prompt_used": "custom" if prompt_template else "default",
+                    "text_preview": text_value[:280],
+                })
 
-    # Compose final headers: original + single utile column
-    extra_cols = ["A1_utile"]
-    final_headers = [*fieldnames]
-    for col in extra_cols:
-        if col not in final_headers:
-            final_headers.append(col)
+            total_time = time.time() - total_start
+            avg_time = total_time / len(rows)
+            print(f"Total: {total_time:.2f}s | Average: {avg_time:.2f}s per row\n")
+            mlflow.log_metric(f"{model_name}_total_latency_sec", total_time)
+            mlflow.log_metric(f"{model_name}_avg_latency_sec", avg_time)
 
-    with open(output_csv, "w", encoding="utf-8", newline="") as wf:
-        writer = csv.DictWriter(wf, fieldnames=final_headers)
-        writer.writeheader()
-        for r in augmented_rows:
-            writer.writerow(r)
-    print(f"Saved CSV: {output_csv}")
+        mlflow.log_metric("tweets_processed", len(rows))
+
+        # Resolve default output path if not provided (place under RESULTS_DIR)
+        if not output_csv:
+            output_csv = os.path.join(RESULTS_DIR, f"{base_name}_results.csv")
+        if not log_csv:
+            log_csv = os.path.join(RESULTS_DIR, f"{base_name}_log.csv")
+
+        # Export
+        out_dir = os.path.dirname(output_csv)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        # Compose final headers: original + single utile column
+        extra_cols = ["A1_utile"]
+        final_headers = [*fieldnames]
+        for col in extra_cols:
+            if col not in final_headers:
+                final_headers.append(col)
+
+        with open(output_csv, "w", encoding="utf-8", newline="") as wf:
+            writer = csv.DictWriter(wf, fieldnames=final_headers)
+            writer.writeheader()
+            for r in augmented_rows:
+                writer.writerow(r)
+        print(f"Saved CSV: {output_csv}")
+
+        log_fields = [
+            "timestamp",
+            "model",
+            "row_index",
+            "tweet_id",
+            "screen_name",
+            "elapsed_sec",
+            "raw_output",
+            "extracted_value",
+            "mapped_utile",
+            "prompt_used",
+            "text_preview",
+        ]
+        with open(log_csv, "w", encoding="utf-8", newline="") as lf:
+            writer = csv.DictWriter(lf, fieldnames=log_fields)
+            writer.writeheader()
+            for entry in log_entries:
+                writer.writerow(entry)
+        print(f"Saved log CSV: {log_csv}")
+
+        mlflow.log_param("output_csv", output_csv)
+        mlflow.log_param("log_csv", log_csv)
+        mlflow.log_artifact(output_csv, artifact_path="results")
+        mlflow.log_artifact(log_csv, artifact_path="logs")
+
+        judge_csv_path = run_judge_on_log(
+            log_csv=Path(log_csv),
+            output_csv=None,
+            judge_key="J_utile_consistency",
+            tracking_uri=MLFLOW_TRACKING_URI,
+            experiment_name=MLFLOW_EXPERIMENT,
+            start_run=False,
+        )
+        mlflow.log_param("judge_csv", str(judge_csv_path))
+
     return augmented_rows
 
 
@@ -204,6 +294,7 @@ def main() -> None:
     run_quick_check(
         input_csv=INPUT_CSV,
         output_csv=OUTPUT_CSV,
+        log_csv=LOG_CSV,
         max_rows=MAX_ROWS,
         models=MODELS,
     )
