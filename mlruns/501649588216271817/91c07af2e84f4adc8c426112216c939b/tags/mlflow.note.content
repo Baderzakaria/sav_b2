@@ -1,0 +1,8 @@
+this run have 5 agents and the agent respond to each one of them 
+the result have problems
+
+1. the agent taking so much time thinking
+2. the orchestrator respond to each one of them
+3. the CSV wasnt created properly because of the complicated responses
+
+**Prompts to be simplified, faster communication between the agents **

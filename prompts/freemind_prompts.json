@@ -1,33 +1,30 @@
 {
-  "version": "v0.1",
-  "description": "Prompt catalog for FreeMind agents and MLflow judges.",
+  "version": "v1.0",
+  "description": "FreeMind Agents for SAV triage",
   "agents": {
     "A1_utile": {
       "name": "A1_utile",
-      "prompt_template": "You are Agent A1 for SAV triage. Read the tweet text verbatim and decide if it reports a service issue that needs customer support follow-up. Do not rewrite the tweet. Respond strictly in JSON with one key named \"status\" whose value is one of: \"problem\", \"not_problem\", or \"unclear\". Tweet:\\n{{full_text}}",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "problem",
-              "not_problem",
-              "unclear"
-            ]
-          }
-        },
-        "required": [
-          "status"
-        ]
-      }
-    }
-  },
-  "judges": {
-    "J_utile_consistency": {
-      "name": "utile_consistency",
-      "instructions": "You are a quality judge for SAV tweet classification. Review the original tweet ({{ inputs.tweet }}) and the agent's JSON response ({{ inputs.raw_output }}). The downstream pipeline mapped the agent decision to {{ outputs.prediction }}. Return \"pass\" if the mapping is justified (e.g., tweet clearly contains or lacks a customer issue) and \"fail\" if the classification is incorrect or insufficient. Include a brief rationale in the \"reason\" field of the JSON you return."
+      "prompt_template": "You are Agent A1. Analyze if this tweet is useful for Customer Support (SAV). useful = true if it is a complaint, question, or feedback. useful = false if it is spam, ads, or unrelated. Return JSON: {\"utile\": boolean}. Tweet:\n{{full_text}}"
+    },
+    "A2_categorie": {
+      "name": "A2_categorie",
+      "prompt_template": "You are Agent A2. Categorize this tweet into ONE of: \"probleme\", \"question\", \"retour_client\". Return JSON: {\"categorie\": \"string\"}. Tweet:\n{{full_text}}"
+    },
+    "A3_sentiment": {
+      "name": "A3_sentiment",
+      "prompt_template": "You are Agent A3. Determine the sentiment: \"colere\", \"frustration\", \"neutre\", \"satisfaction\". Return JSON: {\"sentiment\": \"string\"}. Tweet:\n{{full_text}}"
+    },
+    "A4_type_probleme": {
+      "name": "A4_type_probleme",
+      "prompt_template": "You are Agent A4. Identify the problem type: \"panne\", \"facturation\", \"abonnement\", \"resiliation\", \"information\", \"autre\". Return JSON: {\"type_probleme\": \"string\"}. Tweet:\n{{full_text}}"
+    },
+    "A5_gravite": {
+      "name": "A5_gravite",
+      "prompt_template": "You are Agent A5. Score the gravity from -10 (extremely positive) to +10 (critical emergency). Return JSON: {\"score_gravite\": int}. Tweet:\n{{full_text}}"
+    },
+    "A6_checker": {
+      "name": "A6_checker",
+      "prompt_template": "You are the Orchestrator. Validate the consistency of these results. If 'utile' is false, gravity should be near 0. Return JSON with final consolidated keys: {\"utile\": bool, \"categorie\": str, \"sentiment\": str, \"type_probleme\": str, \"score_gravite\": int, \"status\": \"success/error\"}. Inputs:\n{{agent_results}}"
     }
   }
 }
-
