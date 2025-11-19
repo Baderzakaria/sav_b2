@@ -11,7 +11,7 @@ from utils_runtime import call_native_generate
 # --- Configuration ---
 INPUT_CSV = "data/free tweet export.csv"
 RESULTS_DIR = "data/results"
-MAX_ROWS = 100
+MAX_ROWS = 6000
 MODEL_NAME = "llama3.2:3b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
@@ -21,15 +21,22 @@ with open("prompts/freemind_prompts.json", "r", encoding="utf-8") as f:
     PROMPTS = json.load(f)["agents"]
 
 # --- Helper: Clean JSON Extraction ---
-def extract_json_value(response: str, key: str = None) -> Any:
-    """Extracts a specific key from a JSON-like response, with regex fallback."""
+def extract_json_value(response: str, key: str = None, aliases: Optional[list[str]] = None) -> Any:
+    """Extract a key (with optional aliases) from a JSON-like response."""
+    if response is None:
+        return None
     cleaned_response = response.strip()
-    
+    keys_to_try = [key] if key else []
+    if aliases:
+        keys_to_try.extend([alias for alias in aliases if alias and alias not in keys_to_try])
+
     # 1. Try pure JSON parsing (fastest)
     try:
         data = json.loads(cleaned_response)
-        if key and isinstance(data, dict):
-            return data.get(key)
+        if keys_to_try and isinstance(data, dict):
+            for candidate in keys_to_try:
+                if candidate in data:
+                    return data.get(candidate)
         return data
     except json.JSONDecodeError:
         pass
@@ -40,24 +47,27 @@ def extract_json_value(response: str, key: str = None) -> Any:
         if match:
             json_str = match.group(0)
             data = json.loads(json_str)
-            if key and isinstance(data, dict):
-                return data.get(key)
+            if keys_to_try and isinstance(data, dict):
+                for candidate in keys_to_try:
+                    if candidate in data:
+                        return data.get(candidate)
             return data
     except:
         pass
 
-    # 3. Regex Fallback for specific keys (Robustness)
-    if key:
-        # Look for "key": "value" or "key": value
-        pattern = f'"{key}"\s*:\s*("([^"]*)"|(\d+|true|false|null))'
+    # 3. Regex fallback for each candidate key
+    for candidate in keys_to_try:
+        pattern = f'"{candidate}"\\s*:\\s*("([^"]*)"|(\\d+|true|false|null))'
         match = re.search(pattern, cleaned_response, re.IGNORECASE)
         if match:
             val_str = match.group(2) or match.group(3)
-            # Convert types
-            if val_str.lower() == "true": return True
-            if val_str.lower() == "false": return False
-            if val_str.lower() == "null": return None
-            if val_str.isdigit(): return int(val_str)
+            if isinstance(val_str, str):
+                lowered = val_str.lower()
+                if lowered == "true": return True
+                if lowered == "false": return False
+                if lowered == "null": return None
+            if isinstance(val_str, str) and val_str.isdigit():
+                return int(val_str)
             return val_str
 
     return None
@@ -106,6 +116,9 @@ def node_a6_checker(state):
     final_json = extract_json_value(response)
     if not isinstance(final_json, dict):
          final_json = {"status": "error", "raw_response": response}
+    else:
+        if "utile" not in final_json and "useful" in final_json:
+            final_json["utile"] = final_json.get("useful")
         
     return {"final_json": final_json}
 
@@ -163,12 +176,16 @@ def main():
     log_entries = []
     start_pipeline = time.time()
     
+    print(f"=== FreeMind Orchestrator run_{timestamp} ===")
+    print(f"Input file: {INPUT_CSV} | Rows planned: {len(rows)} | Model: {MODEL_NAME}")
+
     with mlflow.start_run(run_name=f"pipeline_run_{timestamp}"):
         for i, row in enumerate(rows, 1):
             full_text = row.get("full_text", "") or str(row)
             row_start = time.time()
             
-            print(f"Processing {i}/{len(rows)}: ID {row.get('id')}")
+            print(f"\n[{i}/{len(rows)}] Tweet ID={row.get('id')}")
+            print(f"  Text: {full_text[:500]}{'...' if len(full_text) > 500 else ''}")
             
             # Run Pipeline
             inputs = {"full_text": full_text}
@@ -178,11 +195,19 @@ def main():
             final = output.get("final_json", {})
             
             # Extract Clean Values from Raw Agent Outputs
-            a1_val = extract_json_value(output.get("a1_result"), "utile")
+            a1_val = extract_json_value(output.get("a1_result"), "utile", aliases=["useful"])
             a2_val = extract_json_value(output.get("a2_result"), "categorie")
             a3_val = extract_json_value(output.get("a3_result"), "sentiment")
             a4_val = extract_json_value(output.get("a4_result"), "type_probleme")
             a5_val = extract_json_value(output.get("a5_result"), "score_gravite")
+
+            print(f"  A1 utile      : {a1_val}")
+            print(f"  A2 categorie  : {a2_val}")
+            print(f"  A3 sentiment  : {a3_val}")
+            print(f"  A4 type       : {a4_val}")
+            print(f"  A5 gravité    : {a5_val}")
+            print(f"  Checker status: {final.get('status', 'unknown')} | utile={final.get('utile')} | gravité={final.get('score_gravite')}")
+            print(f"  Row latency   : {elapsed:.2f}s")
 
             # Log clean JSON artifact
             mlflow.log_dict(final, f"results/tweet_{row.get('id', i)}.json")
@@ -244,6 +269,14 @@ def main():
         with open(metadata_json_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         print(f"Metadata saved to {metadata_json_path}")
+        print(f"\n=== Run Summary ===")
+        print(f"Rows processed : {len(log_entries)}")
+        print(f"Total duration : {total_duration:.2f}s")
+        print(f"Avg per row    : {metadata['avg_sec_per_row']:.2f}s")
+        print(f"CSV            : {log_csv_path}")
+        print(f"Metadata       : {metadata_json_path}")
+    else:
+        print("No rows processed; nothing to log.")
 
 if __name__ == "__main__":
     main()

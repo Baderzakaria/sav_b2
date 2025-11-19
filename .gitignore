@@ -166,3 +166,6 @@ secrets/
 *.key
 config.local.*
 
+# Experiment artifacts
+mlruns/
+

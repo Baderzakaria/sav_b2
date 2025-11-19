@@ -1,30 +1,30 @@
 {
-  "version": "v1.0",
-  "description": "FreeMind Agents for SAV triage",
+  "version": "v1.1",
+  "description": "FreeMind Agents for SAV triage and sentiment analysis",
   "agents": {
     "A1_utile": {
       "name": "A1_utile",
-      "prompt_template": "You are Agent A1. Analyze if this tweet is useful for Customer Support (SAV). useful = true if it is a complaint, question, or feedback. useful = false if it is spam, ads, or unrelated. Return JSON: {\"utile\": boolean}. Tweet:\n{{full_text}}"
+      "prompt_template": "You are Agent A1. Decide if this tweet is useful for understanding customer perception of Free. useful = true when the tweet expresses a real experience, opinion, or issue about a Free product or service (including praise, frustration, questions, or complaints). useful = false only when the text is pure marketing/advertising with no user signal, unrelated spam, or lacks any consumer insight. Focus on the original text; DO NOT translate or paraphrase it. Output MUST be a single line of valid JSON with no explanation, markdown, or code fences: {\"utile\": true/false}. Tweet:\n{{full_text}}"
     },
     "A2_categorie": {
       "name": "A2_categorie",
-      "prompt_template": "You are Agent A2. Categorize this tweet into ONE of: \"probleme\", \"question\", \"retour_client\". Return JSON: {\"categorie\": \"string\"}. Tweet:\n{{full_text}}"
+      "prompt_template": "You are Agent A2. Categorize this tweet into ONE of: \"probleme\", \"question\", \"retour_client\" using the original language (do NOT translate). Respond with a single JSON object and nothing else: {\"categorie\": \"value\"}. Tweet:\n{{full_text}}"
     },
     "A3_sentiment": {
       "name": "A3_sentiment",
-      "prompt_template": "You are Agent A3. Determine the sentiment: \"colere\", \"frustration\", \"neutre\", \"satisfaction\". Return JSON: {\"sentiment\": \"string\"}. Tweet:\n{{full_text}}"
+      "prompt_template": "You are Agent A3. Determine the sentiment: \"colere\", \"frustration\", \"neutre\", \"satisfaction\". Never translate or explain the tweet; only classify it. Output only valid JSON: {\"sentiment\": \"value\"}. Tweet:\n{{full_text}}"
     },
     "A4_type_probleme": {
       "name": "A4_type_probleme",
-      "prompt_template": "You are Agent A4. Identify the problem type: \"panne\", \"facturation\", \"abonnement\", \"resiliation\", \"information\", \"autre\". Return JSON: {\"type_probleme\": \"string\"}. Tweet:\n{{full_text}}"
+      "prompt_template": "You are Agent A4. Identify the problem type: \"panne\", \"facturation\", \"abonnement\", \"resiliation\", \"information\", \"autre\". Work directly with the provided text (no translation) and respond with JSON only: {\"type_probleme\": \"value\"}. Tweet:\n{{full_text}}"
     },
     "A5_gravite": {
       "name": "A5_gravite",
-      "prompt_template": "You are Agent A5. Score the gravity from -10 (extremely positive) to +10 (critical emergency). Return JSON: {\"score_gravite\": int}. Tweet:\n{{full_text}}"
+      "prompt_template": "You are Agent A5. Score the gravity from -10 (extremely positive) to +10 (critical emergency). Do not translate or add commentary. Return only JSON: {\"score_gravite\": int}. Tweet:\n{{full_text}}"
     },
     "A6_checker": {
       "name": "A6_checker",
-      "prompt_template": "You are the Orchestrator. Validate the consistency of these results. If 'utile' is false, gravity should be near 0. Return JSON with final consolidated keys: {\"utile\": bool, \"categorie\": str, \"sentiment\": str, \"type_probleme\": str, \"score_gravite\": int, \"status\": \"success/error\"}. Inputs:\n{{agent_results}}"
+      "prompt_template": "You are the Orchestrator. Validate the consistency of these results. If 'utile' is false, gravity should be near 0. Return JSON with final consolidated keys: {\"utile\": bool, \"categorie\": str, \"sentiment\": str, \"type_probleme\": str, \"score_gravite\": int, \"status\": \"success/error\"}. Never translate the inputs; focus on consistency only. Reply with JSON only, no explanation. Inputs:\n{{agent_results}}"
     }
   }
 }
