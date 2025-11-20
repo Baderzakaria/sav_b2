@@ -4,3 +4,7 @@ pandas
 streamlit
 mlflow>=2.17.2
 vaderSentiment
+plotly
+pynvml
+psutil
+dvc

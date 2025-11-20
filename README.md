@@ -51,6 +51,13 @@ Les prompts sources sont versionnes dans `prompts/freemind_prompts.json` (regist
 3. **Streamlit**: `streamlit run apps/streamlit_app.py`
    - Choix dynamique des CSV
    - Apercu complet des colonnes agents + filtrage
+4. **Experiment Control (nouveau)**:
+   - Streamlit charge automatiquement la page `Experiment Control & Watchdog`
+   - Lancez/stoppez l'orchestrateur, ajustez le nombre de tweets, appliquez un watchdog GPU
+   - Edition des prompts A1-A6 (sauvegarde + enregistrement MLflow)
+   - Boutons DVC (`dvc add/commit/push`) pour tracer `data/results`
+   - Monitoring temps reel: `nvidia-smi`, graphiques Plotly (utilisation GPU, alertes), table live des sorties
+   - Historique des runs (à partir des `run_metadata_*.json`)
 4. **Evaluation/Prompts**: `python prompts/register_prompts.py` pour sync MLflow Prompt Registry, `python eval/run_prompt_eval.py` pour tester une variante.
 
 ## Traçage MLflow
@@ -66,6 +73,7 @@ Les prompts sources sont versionnes dans `prompts/freemind_prompts.json` (regist
 
 - **CLI**: chaque tweet imprime l'auteur et le texte complet pour inspection rapide.
 - **Streamlit**: permet tri/filtre, detail d'un tweet, navigation entre executions.
+- **Experiment Control**: interface temps réel pour lancer des experiences, éditer les prompts et surveiller le GPU/DVC.
 - **CSV**: colonnes `A*_` et `Final_*` pre-parses sans JSON brut.
 
 ## Maintenance

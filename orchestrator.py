@@ -3,22 +3,61 @@ import json
 import os
 import time
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, TypedDict, Any, Dict, List, Optional
+
 import mlflow
-from typing import TypedDict, Any, Dict, Optional
 from langgraph.graph import StateGraph, START, END
+from mlflow.tracing.fluent import start_span
+
+from monitoring.gpu_watchdog import GPUWatcher, capture_nvidia_smi
 from utils_runtime import call_native_generate
 
-# --- Configuration ---
+# --- Configuration Defaults ---
 INPUT_CSV = "data/free tweet export.csv"
 RESULTS_DIR = "data/results"
 MAX_ROWS = 6000
 MODEL_NAME = "llama3.2:3b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
+PROMPT_FILE = Path("prompts/freemind_prompts.json")
 
-# --- Load Prompts ---
-with open("prompts/freemind_prompts.json", "r", encoding="utf-8") as f:
-    PROMPTS = json.load(f)["agents"]
+
+# --- Data Classes ---
+@dataclass
+class PipelineConfig:
+    input_csv: str = INPUT_CSV
+    results_dir: str = RESULTS_DIR
+    max_rows: int = MAX_ROWS
+    model_name: str = MODEL_NAME
+    ollama_host: str = OLLAMA_HOST
+    mlflow_experiment: str = MLFLOW_EXPERIMENT_NAME
+    run_name: Optional[str] = None
+    prompt_overrides: Optional[Dict[str, str]] = None
+    enable_live_log: bool = True
+    gpu_mem_floor_mb: int = 2048
+    gpu_temp_ceiling_c: int = 80
+    gpu_watch_workers: int = 1
+    gpu_poll_interval_sec: float = 2.0
+    watchdog_backoff_sec: float = 5.0
+    metadata_tags: Dict[str, Any] = field(default_factory=dict)
+    live_log_dir: Optional[str] = None
+
+
+def ensure_results_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def load_prompts(overrides: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
+    with PROMPT_FILE.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    prompts = data.get("agents", {})
+    if overrides:
+        for key, template in overrides.items():
+            if key in prompts and template:
+                prompts[key]["prompt_template"] = template
+    return prompts
 
 # --- Helper: Clean JSON Extraction ---
 def extract_json_value(response: str, key: str = None, aliases: Optional[list[str]] = None) -> Any:
@@ -72,10 +111,8 @@ def extract_json_value(response: str, key: str = None, aliases: Optional[list[st
 
     return None
 
-# --- 1. Define State ---
-class State(TypedDict):
+class State(TypedDict, total=False):
     full_text: str
-    # Outputs from agents
     a1_result: str
     a2_result: str
     a3_result: str
@@ -83,118 +120,195 @@ class State(TypedDict):
     a5_result: str
     final_json: Dict[str, Any]
 
-# --- 2. Generic Node Function ---
-def run_agent(state: State, agent_key: str, result_key: str):
-    prompt_cfg = PROMPTS[agent_key]
-    prompt = prompt_cfg["prompt_template"].replace("{{full_text}}", state["full_text"])
-    response = call_native_generate(OLLAMA_HOST, MODEL_NAME, prompt)
-    return {result_key: response}
 
-# Specific Nodes
-def node_a1(state): return run_agent(state, "A1_utile", "a1_result")
-def node_a2(state): return run_agent(state, "A2_categorie", "a2_result")
-def node_a3(state): return run_agent(state, "A3_sentiment", "a3_result")
-def node_a4(state): return run_agent(state, "A4_type_probleme", "a4_result")
-def node_a5(state): return run_agent(state, "A5_gravite", "a5_result")
+def build_pipeline(active_prompts: Dict[str, Dict[str, Any]], model_name: str, ollama_host: str):
+    def run_agent(state: State, agent_key: str, result_key: str):
+        prompt_cfg = active_prompts[agent_key]
+        prompt = prompt_cfg["prompt_template"].replace("{{full_text}}", state["full_text"])
 
-def node_a6_checker(state):
-    # Aggregate previous results for the checker
-    results = {
-        "A1": state.get("a1_result"),
-        "A2": state.get("a2_result"),
-        "A3": state.get("a3_result"),
-        "A4": state.get("a4_result"),
-        "A5": state.get("a5_result"),
-    }
-    results_str = json.dumps(results, indent=2)
-    
-    prompt_cfg = PROMPTS["A6_checker"]
-    prompt = prompt_cfg["prompt_template"].replace("{{agent_results}}", results_str)
-    response = call_native_generate(OLLAMA_HOST, MODEL_NAME, prompt)
-    
-    # Use robust extractor for the final JSON
-    final_json = extract_json_value(response)
-    if not isinstance(final_json, dict):
-         final_json = {"status": "error", "raw_response": response}
-    else:
-        if "utile" not in final_json and "useful" in final_json:
-            final_json["utile"] = final_json.get("useful")
-        
-    return {"final_json": final_json}
+        with start_span(
+            name=f"{agent_key}_agent",
+            attributes={"agent_key": agent_key, "model_name": model_name},
+        ) as span:
+            span.set_inputs({"prompt": prompt, "model": model_name})
+            response = call_native_generate(ollama_host, model_name, prompt)
+            span.set_outputs({"raw_response": response})
+        return {result_key: response}
 
-# --- 3. Build Graph (Parallel Execution) ---
-def build_pipeline():
+    def node_a1(state): return run_agent(state, "A1_utile", "a1_result")
+    def node_a2(state): return run_agent(state, "A2_categorie", "a2_result")
+    def node_a3(state): return run_agent(state, "A3_sentiment", "a3_result")
+    def node_a4(state): return run_agent(state, "A4_type_probleme", "a4_result")
+    def node_a5(state): return run_agent(state, "A5_gravite", "a5_result")
+
+    def node_a6_checker(state):
+        results = {
+            "A1": state.get("a1_result"),
+            "A2": state.get("a2_result"),
+            "A3": state.get("a3_result"),
+            "A4": state.get("a4_result"),
+            "A5": state.get("a5_result"),
+        }
+        results_str = json.dumps(results, indent=2)
+
+        prompt_cfg = active_prompts["A6_checker"]
+        prompt = prompt_cfg["prompt_template"].replace("{{agent_results}}", results_str)
+
+        with start_span(
+            name="A6_checker",
+            attributes={"agent_key": "A6_checker", "model_name": model_name},
+        ) as span:
+            span.set_inputs({"prompt": prompt, "aggregated_results": results})
+            response = call_native_generate(ollama_host, model_name, prompt)
+            span.set_outputs({"checker_response": response})
+
+        final_json = extract_json_value(response)
+        if not isinstance(final_json, dict):
+            final_json = {"status": "error", "raw_response": response}
+        else:
+            if "utile" not in final_json and "useful" in final_json:
+                final_json["utile"] = final_json.get("useful")
+
+        return {"final_json": final_json}
+
     workflow = StateGraph(State)
-    
-    # Add nodes
     workflow.add_node("A1", node_a1)
     workflow.add_node("A2", node_a2)
     workflow.add_node("A3", node_a3)
     workflow.add_node("A4", node_a4)
     workflow.add_node("A5", node_a5)
     workflow.add_node("A6", node_a6_checker)
-    
-    # Parallel edges: Start -> A1..A5
+
     workflow.add_edge(START, "A1")
     workflow.add_edge(START, "A2")
     workflow.add_edge(START, "A3")
     workflow.add_edge(START, "A4")
     workflow.add_edge(START, "A5")
-    
-    # Converge: A1..A5 -> A6
+
     workflow.add_edge("A1", "A6")
     workflow.add_edge("A2", "A6")
     workflow.add_edge("A3", "A6")
     workflow.add_edge("A4", "A6")
     workflow.add_edge("A5", "A6")
-    
     workflow.add_edge("A6", END)
     return workflow.compile()
 
-# --- 4. Execution & Logging ---
-def main():
-    app = build_pipeline()
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    mlflow.langchain.autolog() 
-    
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    
-    # New: Timestamped Log file (don't overwrite old logs)
+def append_jsonl(path: str, payload: Dict[str, Any]) -> None:
+    with open(path, "a", encoding="utf-8") as fp:
+        fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def run_pipeline(
+    config: PipelineConfig,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    stop_signal: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+    ensure_results_dir(config.results_dir)
+    live_dir = config.live_log_dir or config.results_dir
+
     timestamp = int(time.time())
-    log_csv_path = os.path.join(RESULTS_DIR, f"freemind_log_{timestamp}.csv")
-    metadata_json_path = os.path.join(RESULTS_DIR, f"run_metadata_{timestamp}.json")
+    run_name = config.run_name or f"run_{timestamp}"
+    log_csv_path = os.path.join(config.results_dir, f"freemind_log_{timestamp}.csv")
+    metadata_json_path = os.path.join(config.results_dir, f"run_metadata_{timestamp}.json")
+    live_log_path = os.path.join(live_dir, f"live_run_{timestamp}.jsonl")
+
+    prompts = load_prompts(config.prompt_overrides)
+    app = build_pipeline(prompts, config.model_name, config.ollama_host)
+
+    mlflow.set_experiment(config.mlflow_experiment)
+    mlflow.langchain.autolog()
+
+    rows: List[Dict[str, Any]] = []
+    if not os.path.exists(config.input_csv):
+        raise FileNotFoundError(f"Input CSV file not found: {config.input_csv}")
     
-    # Read CSV
-    rows = []
-    with open(INPUT_CSV, "r", encoding="utf-8-sig") as f:
+    with open(config.input_csv, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for i, r in enumerate(reader):
-            if i >= MAX_ROWS:
+            if i >= config.max_rows:
                 break
             rows.append(r)
-
-    log_entries = []
-    start_pipeline = time.time()
     
-    print(f"=== FreeMind Orchestrator run_{timestamp} ===")
-    print(f"Input file: {INPUT_CSV} | Rows planned: {len(rows)} | Model: {MODEL_NAME}")
+    if not rows:
+        raise ValueError(f"No rows found in {config.input_csv} or file is empty")
 
-    with mlflow.start_run(run_name=f"pipeline_run_{timestamp}"):
+    watcher: Optional[GPUWatcher] = None
+    watchdog_alerts: List[Dict[str, Any]] = []
+
+    def _watchdog_alert(kind: str, metric) -> None:
+        alert = {
+            "kind": kind,
+            "timestamp": metric.timestamp,
+            "gpu_util": metric.gpu_util,
+            "mem_used_mb": metric.mem_used_mb,
+            "mem_total_mb": metric.mem_total_mb,
+            "temperature": metric.temperature,
+        }
+        watchdog_alerts.append(alert)
+        print(f"[Watchdog] {kind} at {time.strftime('%X', time.localtime(metric.timestamp))}: {alert}")
+
+    try:
+        watcher = GPUWatcher(
+            mem_floor_mb=config.gpu_mem_floor_mb,
+            temp_ceiling_c=config.gpu_temp_ceiling_c,
+            num_workers=config.gpu_watch_workers,
+            poll_interval_sec=config.gpu_poll_interval_sec,
+        )
+        watcher.start(_watchdog_alert)
+    except Exception as exc:
+        print(f"GPU watcher not started: {exc}")
+        watcher = None
+
+    log_entries: List[Dict[str, Any]] = []
+    start_pipeline = time.time()
+    print(f"=== FreeMind Orchestrator {run_name} ===")
+    print(f"Input file: {config.input_csv} | Rows planned: {len(rows)} | Model: {config.model_name}")
+
+    mlflow_tags = {"run_name": run_name, **config.metadata_tags}
+
+    with mlflow.start_run(run_name=f"pipeline_{timestamp}", tags=mlflow_tags):
+        mlflow.set_tags({"gpu_mem_floor_mb": config.gpu_mem_floor_mb})
+        stopped_early = False
         for i, row in enumerate(rows, 1):
+            if stop_signal and stop_signal():
+                print("Stop signal received. Ending run early.")
+                stopped_early = True
+                break
             full_text = row.get("full_text", "") or str(row)
             row_start = time.time()
-            
+
+            latest_gpu = watcher.latest() if watcher else None
+            if latest_gpu and (latest_gpu["mem_total_mb"] - latest_gpu["mem_used_mb"]) < config.gpu_mem_floor_mb:
+                print(f"[Watchdog] Pausing before row {i} due to low free memory.")
+                time.sleep(config.watchdog_backoff_sec)
+                latest_gpu = watcher.latest() if watcher else latest_gpu
+
             print(f"\n[{i}/{len(rows)}] Tweet ID={row.get('id')}")
             print(f"  Text: {full_text[:500]}{'...' if len(full_text) > 500 else ''}")
-            
-            # Run Pipeline
+
             inputs = {"full_text": full_text}
-            output = app.invoke(inputs)
-            
+            with start_span(
+                name="tweet_pipeline",
+                attributes={"tweet_id": row.get("id"), "row_index": i},
+            ) as pipeline_span:
+                pipeline_span.set_inputs({"full_text": full_text})
+                output = app.invoke(inputs)
+                final = output.get("final_json", {})
+                pipeline_span.set_outputs(
+                    {
+                        "final_json": final,
+                        "agents": {
+                            "a1": output.get("a1_result"),
+                            "a2": output.get("a2_result"),
+                            "a3": output.get("a3_result"),
+                            "a4": output.get("a4_result"),
+                            "a5": output.get("a5_result"),
+                        },
+                    }
+                )
+
             elapsed = time.time() - row_start
-            final = output.get("final_json", {})
-            
-            # Extract Clean Values from Raw Agent Outputs
+
             a1_val = extract_json_value(output.get("a1_result"), "utile", aliases=["useful"])
             a2_val = extract_json_value(output.get("a2_result"), "categorie")
             a3_val = extract_json_value(output.get("a3_result"), "sentiment")
@@ -209,10 +323,8 @@ def main():
             print(f"  Checker status: {final.get('status', 'unknown')} | utile={final.get('utile')} | gravité={final.get('score_gravite')}")
             print(f"  Row latency   : {elapsed:.2f}s")
 
-            # Log clean JSON artifact
             mlflow.log_dict(final, f"results/tweet_{row.get('id', i)}.json")
 
-            # --- Prepare Log Entry ---
             entry = {
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "row_index": i,
@@ -220,29 +332,32 @@ def main():
                 "screen_name": row.get("screen_name"),
                 "full_text": full_text,
                 "elapsed_sec": round(elapsed, 2),
-                
-                # Clean Agent Columns (Value Only)
                 "A1_utile": a1_val,
                 "A2_categorie": a2_val,
                 "A3_sentiment": a3_val,
                 "A4_type": a4_val,
                 "A5_gravity": a5_val,
-
-                # Consolidated Final Labels (from A6)
                 "Final_utile": final.get("utile"),
                 "Final_categorie": final.get("categorie"),
                 "Final_sentiment": final.get("sentiment"),
                 "Final_gravity": final.get("score_gravite"),
-                
-                # Diagnostics
                 "status": final.get("status", "unclear"),
                 "json_valid": "yes" if "status" in final else "no",
             }
+            if latest_gpu:
+                entry["gpu_util"] = latest_gpu["gpu_util"]
+                entry["gpu_mem_used_mb"] = latest_gpu["mem_used_mb"]
+                entry["gpu_mem_total_mb"] = latest_gpu["mem_total_mb"]
+                entry["gpu_temp_c"] = latest_gpu["temperature"]
+
             log_entries.append(entry)
-            
+            if config.enable_live_log:
+                append_jsonl(live_log_path, entry)
+            if progress_callback:
+                progress_callback(entry)
+
     total_duration = time.time() - start_pipeline
 
-    # Save to CSV
     if log_entries:
         keys = log_entries[0].keys()
         with open(log_csv_path, "w", encoding="utf-8", newline="") as f:
@@ -250,33 +365,48 @@ def main():
             writer.writeheader()
             writer.writerows(log_entries)
         print(f"Done! Log saved to {log_csv_path}")
-        
-        # Save Metadata (DVC-friendly JSON)
+
         metadata = {
-            "run_id": f"run_{timestamp}",
+            "run_id": run_name,
             "timestamp": timestamp,
-            "input_file": INPUT_CSV,
+            "input_file": config.input_csv,
             "rows_processed": len(log_entries),
             "total_duration_sec": round(total_duration, 2),
             "avg_sec_per_row": round(total_duration / len(log_entries), 2) if log_entries else 0,
-            "model": MODEL_NAME,
-            "experiment": MLFLOW_EXPERIMENT_NAME,
-            "output_files": {
-                "log_csv": log_csv_path,
-                "results_dir": RESULTS_DIR
-            }
+            "model": config.model_name,
+            "experiment": config.mlflow_experiment,
+            "output_files": {"log_csv": log_csv_path, "results_dir": config.results_dir},
+            "watchdog_alerts": watchdog_alerts,
+            "nvidia_smi": capture_nvidia_smi(),
+            "metadata_tags": config.metadata_tags,
+            "stopped_early": stopped_early,
         }
         with open(metadata_json_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         print(f"Metadata saved to {metadata_json_path}")
-        print(f"\n=== Run Summary ===")
-        print(f"Rows processed : {len(log_entries)}")
-        print(f"Total duration : {total_duration:.2f}s")
-        print(f"Avg per row    : {metadata['avg_sec_per_row']:.2f}s")
-        print(f"CSV            : {log_csv_path}")
-        print(f"Metadata       : {metadata_json_path}")
     else:
         print("No rows processed; nothing to log.")
+
+    if watcher:
+        history = watcher.history()
+        watcher.stop()
+    else:
+        history = []
+
+    return {
+        "log_csv": log_csv_path,
+        "metadata": metadata_json_path,
+        "live_log": live_log_path if config.enable_live_log else None,
+        "watchdog_alerts": watchdog_alerts,
+        "gpu_history": history,
+        "stopped_early": locals().get("stopped_early", False),
+    }
+
+
+def main():
+    config = PipelineConfig()
+    run_pipeline(config)
+
 
 if __name__ == "__main__":
     main()

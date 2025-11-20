@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -56,7 +57,48 @@ def load_results(csv_path: str) -> pd.DataFrame:
             df["id"] = df.index
     if "row_index" not in df.columns:
         df["row_index"] = df.index + 1
+    boolish_cols = [col for col in df.columns if col.endswith("_utile")]
+    for col in ["Final_utile", "A1_utile"]:
+        if col in df.columns and col not in boolish_cols:
+            boolish_cols.append(col)
+    for col in boolish_cols:
+        df[col] = coerce_bool_series(df[col])
     return df
+
+
+def coerce_bool_series(series: pd.Series) -> pd.Series:
+    def _parse(value):
+        if pd.isna(value):
+            return pd.NA
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            text = value.strip()
+            lower = text.lower()
+            truthy = {"true", "yes", "1", "vrai"}
+            falsy = {"false", "no", "0", "faux"}
+            if lower in truthy:
+                return True
+            if lower in falsy:
+                return False
+            # Try JSON or dict-like substrings
+            if lower.startswith("{") and "utile" in lower:
+                try:
+                    payload = json.loads(lower.replace("'", '"'))
+                    for key in ("utile", "useful", "utilite"):
+                        if isinstance(payload, dict) and isinstance(payload.get(key), bool):
+                            return payload[key]
+                except json.JSONDecodeError:
+                    pass
+            match = re.search(r"\b(true|false)\b", lower)
+            if match:
+                return match.group(1) == "true"
+        return pd.NA
+
+    parsed = series.apply(_parse)
+    return parsed.astype("boolean")
 
 
 def apply_filters(
@@ -246,8 +288,12 @@ def main():
     cols[0].metric("Rows", len(df))
     cols[1].metric("Authors", df["screen_name"].nunique())
     if "A1_utile" in df.columns:
-        utiles = df["A1_utile"].fillna(False)
-        cols[2].metric("Useful %", f"{(utiles.mean() * 100):.1f}%")
+        utiles = df["A1_utile"]
+        if utiles.notna().any():
+            useful_pct = utiles.dropna().mean() * 100
+            cols[2].metric("Useful %", f"{useful_pct:.1f}%")
+        else:
+            cols[2].metric("Useful %", "n/a")
     else:
         cols[2].metric("Useful %", "n/a")
     if "created_at" in df.columns and df["created_at"].notna().any():
@@ -289,9 +335,9 @@ def main():
     bool_cols = [col for col in ["A1_utile", "Final_utile"] if col in display_df.columns]
     for col in bool_cols:
         display_df[col] = display_df[col].map(
-            lambda v: "True" if pd.notna(v) and bool(v) else ("False" if pd.notna(v) else None)
+            lambda v: "True" if v is True else ("False" if v is False else None)
         )
-    st.dataframe(display_df, use_container_width=True)
+    st.dataframe(display_df, width="stretch")
 
     st.subheader("Inspect a Tweet")
     if filtered.empty:
