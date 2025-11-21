@@ -1,7 +1,15 @@
 import requests
+from typing import Any, Dict, Optional
 
 
-def call_native_generate(ollama_host: str, model: str, prompt: str) -> str:
+def call_native_generate(
+    ollama_host: str,
+    model: str,
+    prompt: str,
+    *,
+    options: Optional[Dict[str, Any]] = None,
+    timeout: int = 60,
+) -> str:
     """Call Ollama, supporting both /api/generate and /api/chat.
 
     Tries /api/generate first for compatibility; on 404 falls back to /api/chat.
@@ -9,10 +17,16 @@ def call_native_generate(ollama_host: str, model: str, prompt: str) -> str:
     """
 
     generate_url = f"{ollama_host}/api/generate"
-    generate_payload = {"model": model, "prompt": prompt, "stream": False}
+    generate_payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if options:
+        generate_payload["options"] = options
 
     try:
-        resp = requests.post(generate_url, json=generate_payload, timeout=60)
+        resp = requests.post(generate_url, json=generate_payload, timeout=timeout)
         if resp.status_code == 404:
             raise requests.HTTPError("Not Found", response=resp)
         resp.raise_for_status()
@@ -25,12 +39,14 @@ def call_native_generate(ollama_host: str, model: str, prompt: str) -> str:
             raise
 
         chat_url = f"{ollama_host}/api/chat"
-        chat_payload = {
+        chat_payload: Dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
         }
-        chat_resp = requests.post(chat_url, json=chat_payload, timeout=60)
+        if options:
+            chat_payload["options"] = options
+        chat_resp = requests.post(chat_url, json=chat_payload, timeout=timeout)
         chat_resp.raise_for_status()
         chat_data = chat_resp.json()
         # Chat response shape

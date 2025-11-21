@@ -17,8 +17,8 @@ from utils_runtime import call_native_generate
 # --- Configuration Defaults ---
 INPUT_CSV = "data/cleaned/free_tweet_export-latest.csv"
 RESULTS_DIR = "data/results"
-MAX_ROWS = 10
-MODEL_NAME = "llama3.2:1b"
+MAX_ROWS = 50
+MODEL_NAME = "llama3.2:3b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
@@ -43,6 +43,14 @@ class PipelineConfig:
     watchdog_backoff_sec: float = 5.0
     metadata_tags: Dict[str, Any] = field(default_factory=dict)
     live_log_dir: Optional[str] = None
+    ollama_options: Dict[str, Any] = field(default_factory=dict)
+    enable_model_warmup: bool = True
+    warmup_prompt: str = "Analyse ce texte pour t'initialiser."
+    warmup_repeat: int = 1
+    enable_adaptive_mem_floor: bool = True
+    adaptive_mem_floor_timeout_sec: float = 8.0
+    adaptive_mem_floor_slack_mb: int = 1024
+    adaptive_mem_floor_min_mb: int = 1024
 
 
 def ensure_results_dir(path: str) -> None:
@@ -58,6 +66,53 @@ def load_prompts(overrides: Optional[Dict[str, str]] = None) -> Dict[str, Dict[s
             if key in prompts and template:
                 prompts[key]["prompt_template"] = template
     return prompts
+
+
+def run_model_warmup(config: PipelineConfig) -> None:
+    """Prime the Ollama runtime so weights stay resident in GPU memory."""
+    if not config.enable_model_warmup:
+        return
+    prompt = (config.warmup_prompt or "").strip() or "Ping de préchauffage."
+    attempts = max(1, config.warmup_repeat)
+    for idx in range(attempts):
+        try:
+            call_native_generate(
+                config.ollama_host,
+                config.model_name,
+                prompt,
+                options=config.ollama_options,
+                timeout=30,
+            )
+        except Exception as exc:
+            print(f"Warmup attempt {idx + 1}/{attempts} skipped: {exc}")
+            break
+
+
+def wait_for_gpu_metric(watcher: Optional[GPUWatcher], timeout: float) -> Optional[Dict[str, float]]:
+    if watcher is None:
+        return None
+    deadline = time.time() + max(timeout, 0)
+    metric = watcher.latest()
+    while metric is None and time.time() < deadline:
+        time.sleep(min(watcher.poll_interval_sec, 0.5))
+        metric = watcher.latest()
+    return metric
+
+
+def adapt_gpu_mem_floor(watcher: Optional[GPUWatcher], config: PipelineConfig) -> None:
+    if watcher is None or not config.enable_adaptive_mem_floor:
+        return
+    metric = wait_for_gpu_metric(watcher, config.adaptive_mem_floor_timeout_sec)
+    if not metric:
+        print("Adaptive GPU mem floor skipped: no metrics yet.")
+        return
+    mem_free = max(metric["mem_total_mb"] - metric["mem_used_mb"], 0)
+    target_floor = max(config.adaptive_mem_floor_min_mb, mem_free - config.adaptive_mem_floor_slack_mb)
+    watcher.mem_floor_mb = max(config.adaptive_mem_floor_min_mb, target_floor)
+    print(
+        f"[Watchdog] Adaptive memory floor set to {watcher.mem_floor_mb:.0f} MB "
+        f"(baseline free ~{mem_free:.0f} MB)."
+    )
 
 # --- Helper: Clean JSON Extraction ---
 def extract_json_value(response: str, key: str = None, aliases: Optional[list[str]] = None) -> Any:
@@ -121,7 +176,12 @@ class State(TypedDict, total=False):
     final_json: Dict[str, Any]
 
 
-def build_pipeline(active_prompts: Dict[str, Dict[str, Any]], model_name: str, ollama_host: str):
+def build_pipeline(
+    active_prompts: Dict[str, Dict[str, Any]],
+    model_name: str,
+    ollama_host: str,
+    ollama_options: Optional[Dict[str, Any]] = None,
+):
     def run_agent(state: State, agent_key: str, result_key: str):
         prompt_cfg = active_prompts[agent_key]
         prompt = prompt_cfg["prompt_template"].replace("{{full_text}}", state["full_text"])
@@ -131,7 +191,12 @@ def build_pipeline(active_prompts: Dict[str, Dict[str, Any]], model_name: str, o
             attributes={"agent_key": agent_key, "model_name": model_name},
         ) as span:
             span.set_inputs({"prompt": prompt, "model": model_name})
-            response = call_native_generate(ollama_host, model_name, prompt)
+            response = call_native_generate(
+                ollama_host,
+                model_name,
+                prompt,
+                options=ollama_options,
+            )
             span.set_outputs({"raw_response": response})
         return {result_key: response}
 
@@ -142,32 +207,76 @@ def build_pipeline(active_prompts: Dict[str, Dict[str, Any]], model_name: str, o
     def node_a5(state): return run_agent(state, "A5_gravite", "a5_result")
 
     def node_a6_checker(state):
-        results = {
-            "A1": state.get("a1_result"),
-            "A2": state.get("a2_result"),
-            "A3": state.get("a3_result"),
-            "A4": state.get("a4_result"),
-            "A5": state.get("a5_result"),
+        # Parse agent results to extract actual values
+        a1_raw = state.get("a1_result", "")
+        a2_raw = state.get("a2_result", "")
+        a3_raw = state.get("a3_result", "")
+        a4_raw = state.get("a4_result", "")
+        a5_raw = state.get("a5_result", "")
+        
+        a1_parsed = extract_json_value(a1_raw, "utile", aliases=["useful"])
+        a2_parsed = extract_json_value(a2_raw, "categorie")
+        a3_parsed = extract_json_value(a3_raw, "sentiment")
+        a4_parsed = extract_json_value(a4_raw, "type_probleme")
+        a5_parsed = extract_json_value(a5_raw, "score_gravite")
+        
+        # Build structured results for the checker
+        parsed_results = {
+            "A1": {"utile": a1_parsed, "raw": a1_raw},
+            "A2": {"categorie": a2_parsed, "raw": a2_raw},
+            "A3": {"sentiment": a3_parsed, "raw": a3_raw},
+            "A4": {"type_probleme": a4_parsed, "raw": a4_raw},
+            "A5": {"score_gravite": a5_parsed, "raw": a5_raw},
         }
-        results_str = json.dumps(results, indent=2)
+        results_str = json.dumps(parsed_results, indent=2, ensure_ascii=False)
+        
+        # Get the original tweet text
+        full_text = state.get("full_text", "")
 
         prompt_cfg = active_prompts["A6_checker"]
         prompt = prompt_cfg["prompt_template"].replace("{{agent_results}}", results_str)
+        prompt = prompt.replace("{{full_text}}", full_text)
 
         with start_span(
             name="A6_checker",
             attributes={"agent_key": "A6_checker", "model_name": model_name},
         ) as span:
-            span.set_inputs({"prompt": prompt, "aggregated_results": results})
-            response = call_native_generate(ollama_host, model_name, prompt)
+            span.set_inputs({"prompt": prompt, "parsed_results": parsed_results})
+            response = call_native_generate(ollama_host, model_name, prompt, options=ollama_options)
             span.set_outputs({"checker_response": response})
 
         final_json = extract_json_value(response)
+        
+        # If checker failed to return valid JSON, fall back to parsed agent results
         if not isinstance(final_json, dict):
-            final_json = {"status": "error", "raw_response": response}
+            final_json = {
+                "utile": a1_parsed,
+                "categorie": a2_parsed,
+                "sentiment": a3_parsed,
+                "type_probleme": a4_parsed,
+                "score_gravite": a5_parsed,
+                "status": "error",
+                "raw_response": response,
+            }
         else:
+            # Handle alias first
             if "utile" not in final_json and "useful" in final_json:
                 final_json["utile"] = final_json.get("useful")
+            
+            # Ensure all required keys are present, using agent results as fallback only if key is missing
+            # (If checker explicitly sets null, we keep it)
+            if "utile" not in final_json:
+                final_json["utile"] = a1_parsed
+            if "categorie" not in final_json:
+                final_json["categorie"] = a2_parsed
+            if "sentiment" not in final_json:
+                final_json["sentiment"] = a3_parsed
+            if "type_probleme" not in final_json:
+                final_json["type_probleme"] = a4_parsed
+            if "score_gravite" not in final_json:
+                final_json["score_gravite"] = a5_parsed
+            if "status" not in final_json:
+                final_json["status"] = "success"
 
         return {"final_json": final_json}
 
@@ -209,11 +318,13 @@ def run_pipeline(
     timestamp = int(time.time())
     run_name = config.run_name or f"run_{timestamp}"
     log_csv_path = os.path.join(config.results_dir, f"freemind_log_{timestamp}.csv")
+    log_csv_latest_path = os.path.join(config.results_dir, "freemind_log_latest.csv")
     metadata_json_path = os.path.join(config.results_dir, f"run_metadata_{timestamp}.json")
+    metadata_json_latest_path = os.path.join(config.results_dir, "run_metadata_latest.json")
     live_log_path = os.path.join(live_dir, f"live_run_{timestamp}.jsonl")
 
     prompts = load_prompts(config.prompt_overrides)
-    app = build_pipeline(prompts, config.model_name, config.ollama_host)
+    app = build_pipeline(prompts, config.model_name, config.ollama_host, config.ollama_options)
 
     mlflow.set_experiment(config.mlflow_experiment)
     mlflow.langchain.autolog()
@@ -262,6 +373,10 @@ def run_pipeline(
         print(f"GPU watcher not started: {exc}")
         watcher = None
 
+    if config.enable_model_warmup:
+        run_model_warmup(config)
+        adapt_gpu_mem_floor(watcher, config)
+
     log_entries: List[Dict[str, Any]] = []
     start_pipeline = time.time()
     print(f"=== FreeMind Orchestrator {run_name} ===")
@@ -277,7 +392,7 @@ def run_pipeline(
                 print("Stop signal received. Ending run early.")
                 stopped_early = True
                 break
-            full_text = row.get("full_text", "") or str(row)
+            full_text = row.get("clean_text", "") or row.get("full_text", "") or str(row)
             row_start = time.time()
 
             latest_gpu = watcher.latest() if watcher else None
@@ -334,6 +449,10 @@ def run_pipeline(
                 "tweet_id": row.get("id"),
                 "screen_name": row.get("screen_name"),
                 "full_text": full_text,
+                "date_iso": row.get("date_iso"),
+                "clean_text": row.get("clean_text"),
+                "favorite_count": row.get("favorite_count"),
+                "reply_count": row.get("reply_count"),
                 "elapsed_sec": round(elapsed, 2),
                 "A1_utile": a1_val,
                 "A2_categorie": a2_val,
@@ -347,11 +466,6 @@ def run_pipeline(
                 "status": final.get("status", "unclear"),
                 "json_valid": "yes" if "status" in final else "no",
             }
-            if latest_gpu:
-                entry["gpu_util"] = latest_gpu["gpu_util"]
-                entry["gpu_mem_used_mb"] = latest_gpu["mem_used_mb"]
-                entry["gpu_mem_total_mb"] = latest_gpu["mem_total_mb"]
-                entry["gpu_temp_c"] = latest_gpu["temperature"]
 
             log_entries.append(entry)
             if config.enable_live_log:
@@ -363,11 +477,12 @@ def run_pipeline(
 
     if log_entries:
         keys = log_entries[0].keys()
-        with open(log_csv_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(log_entries)
-        print(f"Done! Log saved to {log_csv_path}")
+        for output_path in (log_csv_path, log_csv_latest_path):
+            with open(output_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=keys)
+                writer.writeheader()
+                writer.writerows(log_entries)
+        print(f"Done! Log saved to {log_csv_path} and {log_csv_latest_path}")
 
         metadata = {
             "run_id": run_name,
@@ -384,9 +499,10 @@ def run_pipeline(
             "metadata_tags": config.metadata_tags,
             "stopped_early": stopped_early,
         }
-        with open(metadata_json_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
-        print(f"Metadata saved to {metadata_json_path}")
+        for output_path in (metadata_json_path, metadata_json_latest_path):
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
+        print(f"Metadata saved to {metadata_json_path} and {metadata_json_latest_path}")
     else:
         print("No rows processed; nothing to log.")
 

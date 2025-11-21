@@ -1,0 +1,25 @@
+{
+  "input_file": "/home/bader/Desktop/sav_b2/data/free tweet export.csv",
+  "records_in": 6375,
+  "records_out": 5807,
+  "timestamp_utc": "20251121T110005Z",
+  "outputs": {
+    "csv_latest": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-latest.csv",
+    "csv_timestamped": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-20251121T110005Z.csv",
+    "json_latest": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-latest.json",
+    "json_timestamped": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-20251121T110005Z.json"
+  },
+  "sentiment": {
+    "positif": 3919,
+    "neutre": 1746,
+    "negatif": 142
+  },
+  "themes": {
+    "autre": 3251,
+    "reseau": 1774,
+    "support": 600,
+    "abonnement": 113,
+    "facturation": 69
+  },
+  "urgent_count": 568
+}

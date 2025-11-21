@@ -1,0 +1,18 @@
+{
+  "run_id": "run_1763733827",
+  "timestamp": 1763733827,
+  "input_file": "data/cleaned/free_tweet_export-latest.csv",
+  "rows_processed": 50,
+  "total_duration_sec": 231.25,
+  "avg_sec_per_row": 4.62,
+  "model": "llama3.2:3b",
+  "experiment": "FreeMind_Orchestrator",
+  "output_files": {
+    "log_csv": "data/results/freemind_log_1763733827.csv",
+    "results_dir": "data/results"
+  },
+  "watchdog_alerts": [],
+  "nvidia_smi": "Fri Nov 21 14:07:41 2025       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 555.42.02              Driver Version: 555.42.02      CUDA Version: 12.5     |\n|-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA GeForce RTX 4070        Off |   00000000:42:00.0 Off |                  N/A |\n| 30%   41C    P2            173W /  200W |    2959MiB /  12282MiB |     70%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n                                                                                         \n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|    0   N/A  N/A      2297      G   /usr/lib/xorg/Xorg                              8MiB |\n|    0   N/A  N/A      3222      G   /usr/bin/gnome-shell                            3MiB |\n|    0   N/A  N/A   2179455      C   /usr/local/bin/ollama                        2924MiB |\n+-----------------------------------------------------------------------------------------+\n",
+  "metadata_tags": {},
+  "stopped_early": false
+}

@@ -1,0 +1,129 @@
+# GPU Threads Performance Comparison
+
+## Executive Summary
+
+**Finding**: Increasing GPU watchdog threads from 1 to 4 results in a **2.5% slowdown** (1.73 seconds overhead for 50 rows). The `gpu_threads` parameter controls **monitoring overhead**, not inference parallelism.
+
+---
+
+## Test Configuration
+
+| Run ID | GPU Threads | Model | Rows | Date |
+|--------|-------------|-------|------|------|
+| `run_1763656442` | **4 threads** | llama3.2:3b | 50 | 2025-11-20 16:34 |
+| `run_1763655076` | **1 thread** | llama3.2:3b | 50 | 2025-11-20 16:11 |
+
+Both runs processed the same 50 tweets with identical model and pipeline configuration.
+
+---
+
+## Performance Metrics
+
+### Overall Duration
+
+| Metric | 4 Threads | 1 Thread | Difference |
+|--------|-----------|----------|------------|
+| **Total Duration** | 71.88s | 70.15s | **+1.73s (+2.5%)** |
+| **Avg sec/row** | 1.44s | 1.40s | +0.04s |
+| **Rows processed** | 50 | 50 | 0 |
+
+**Verdict**: ❌ 4-thread run is **2.5% slower**
+
+### Per-Row Latency Statistics
+
+| Statistic | 4 Threads | 1 Thread | Difference |
+|-----------|-----------|----------|------------|
+| **Mean** | 1.427s | 1.401s | +0.026s |
+| **Median** | 1.410s | 1.375s | +0.035s |
+| **Min** | 1.130s | 1.120s | +0.010s |
+| **Max** | 3.020s | 2.810s | +0.210s |
+| **Std Dev** | 0.276s | 0.266s | +0.010s |
+
+The 4-thread run shows slightly higher variance and longer tail latencies.
+
+### GPU Utilization
+
+| Statistic | 4 Threads | 1 Thread | Difference |
+|-----------|----------|----------|------------|
+| **Mean** | 61.1% | 51.9% | +9.2% |
+| **Median** | 68.0% | 52.5% | +15.5% |
+| **Max** | 83.0% | 84.0% | -1.0% |
+
+Higher average GPU utilization in the 4-thread run, but this is from **monitoring overhead**, not useful work.
+
+---
+
+## Why No Performance Gain?
+
+### Key Insight
+
+The `gpu_threads` parameter in `PipelineConfig` controls **GPU watchdog polling workers**, not inference parallelism:
+
+```python
+# From orchestrator.py
+gpu_watch_workers: int = 1  # Number of threads polling GPU metrics
+```
+
+### What Actually Runs in Parallel
+
+1. **LangGraph agents** (A1–A5) already execute in parallel via `StateGraph`:
+   ```python
+   workflow.add_edge(START, "A1")
+   workflow.add_edge(START, "A2")
+   workflow.add_edge(START, "A3")
+   workflow.add_edge(START, "A4")
+   workflow.add_edge(START, "A5")
+   ```
+   All 5 agents start simultaneously and run concurrently.
+
+2. **Ollama inference** handles requests sequentially per model instance. Multiple watchdog threads don't change this.
+
+### What Multiple Threads Actually Do
+
+- **4 threads**: 4 separate threads polling `nvidia-smi` / `pynvml` every 2 seconds
+- **1 thread**: 1 thread polling GPU metrics every 2 seconds
+
+**Result**: More CPU overhead, more lock contention, no inference speedup.
+
+---
+
+## Recommendations
+
+### ✅ Use 1 GPU Watchdog Thread
+
+For most workloads, **1 thread is optimal**:
+- Lower CPU overhead
+- Sufficient monitoring granularity (2s polling interval)
+- No performance penalty
+
+### When to Use Multiple Threads
+
+Consider 2–4 threads only if:
+- You need **sub-second GPU metric resolution** (reduce `gpu_poll_interval_sec` to < 1.0)
+- You're running **multiple independent pipelines** on different GPUs
+- You have **spare CPU cores** and monitoring is more important than throughput
+
+### Real Performance Optimization
+
+To actually speed up inference:
+1. **Batch processing**: Process multiple tweets in a single Ollama request
+2. **Model quantization**: Use smaller/faster models (e.g., `llama3.2:1b` vs `3b`)
+3. **Ollama concurrency**: Run multiple Ollama instances with different models
+4. **Pipeline batching**: Group multiple tweets before invoking the graph
+
+---
+
+## Conclusion
+
+**The `gpu_threads` parameter is a monitoring configuration, not a parallelism knob.** Increasing it adds overhead without improving inference throughput. The agents already run in parallel via LangGraph, so the bottleneck is Ollama's sequential request handling, not GPU monitoring.
+
+**Recommendation**: Keep `gpu_watch_workers=1` for optimal performance.
+
+---
+
+*Generated: 2025-11-20*
+*Analysis of runs: `run_1763656442` (4 threads) vs `run_1763655076` (1 thread)*
+
+
+
+

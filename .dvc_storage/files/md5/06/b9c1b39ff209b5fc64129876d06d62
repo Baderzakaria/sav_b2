@@ -1,0 +1,18 @@
+{
+  "input_file": "/home/bader/Desktop/sav_b2/data/free tweet export.csv",
+  "records_in": 6375,
+  "records_out": 3085,
+  "removed": 3290,
+  "timestamp_utc": "20251121T111907Z",
+  "outputs": {
+    "csv_latest": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-latest.csv",
+    "csv_timestamped": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-20251121T111907Z.csv",
+    "json_latest": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-latest.json",
+    "json_timestamped": "/home/bader/Desktop/sav_b2/data/cleaned/free_tweet_export-20251121T111907Z.json"
+  },
+  "stats": {
+    "avg_clean_length": 144.40518638573744,
+    "median_clean_length": 133.0,
+    "unique_screen_names": 2649
+  }
+}
