@@ -1,252 +1,318 @@
+
+"""Tweet cleaning and enrichment pipeline.
+
+Usage:
+    python clean_free_tweets.py \
+        --input "/home/bader/Desktop/sav_b2/data/free tweet export.csv"
+
+This script removes noisy tweets (retweets, duplicates, off-topic),
+normalizes text, and exports a clean dataset ready for the orchestrator
+(which handles detection, sentiment, and categorisation). Outputs are
+saved as timestamped and "latest" CSV/JSON artifacts under `data/cleaned`,
+with matching metadata stored in `data/results`.
+"""
+
 from __future__ import annotations
 
 import argparse
+import html
+import json
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import Dict
 
 import pandas as pd
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from pandas.api import types as pd_types
 
-MENTION_RE = re.compile(r"(?i)@\w+")
-URL_RE = re.compile(r"https?://\S+")
-WHITESPACE_RE = re.compile(r"\s+")
 
-ON_TOPIC_KEYWORDS = [
-    "free",
-    "freebox",
-    "free mobile",
-    "free pro",
-    "free fibre",
-    "free delta",
-    "free pop",
-    "free 5g",
-    "free 4g",
-    "réseau free",
-    "reseau free",
-    "freewifi",
-    "free assistance",
-    "freebox pop",
-    "freebox delta",
+RE_EMOJI = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "\U00010000-\U0010FFFF"
+    "]+",
+    flags=re.UNICODE,
+)
+RE_URL = re.compile(r"https?://\S+|www\.\S+", flags=re.IGNORECASE)
+RE_MENTION = re.compile(r"@\w+")
+RE_HASHTAG = re.compile(r"#")
+RE_NON_ALNUM = re.compile(r"[^\w\s]", flags=re.UNICODE)
+
+RT_PREFIX = re.compile(r"^RT\s+@.+", flags=re.IGNORECASE)
+
+OFFICIAL_ACCOUNTS = {"Freebox", "Free", "Free_1337", "FreeboxNews"}
+
+AD_SIGNATURES = [
+    "free recrute",
+    "rejoignez free",
+    "free proxi",
+    "freeproxi",
+    "jobs.free",
+    "offre d'emploi free",
+    "free x 2024",
+    "abonnez vous à free",
+    "jeu concours free",
+    "gagne ta freebox",
+    "freebox pop dès",
+    "free mobile 2€",
 ]
 
-THEME_KEYWORDS = {
-    "reseau": [
-        "panne",
-        "coupure",
-        "réseau",
-        "reseau",
-        "connexion",
-        "internet",
-        "debit",
-        "upload",
-        "download",
-        "ping",
-        "fibre",
-        "4g",
-        "5g",
-        "latence",
-    ],
-    "facturation": [
-        "facture",
-        "prelevement",
-        "prélèvement",
-        "paiement",
-        "remboursement",
-        "surfacturation",
-        "montant",
-        "tarif",
-        "prix",
-    ],
-    "abonnement": [
-        "abonnement",
-        "resiliation",
-        "résiliation",
-        "inscription",
-        "offre",
-        "contrat",
-        "portabilite",
-        "portabilité",
-    ],
-    "equipement": [
-        "box",
-        "modem",
-        "routeur",
-        "player",
-        "décodeur",
-        "decodeur",
-        "tv",
-        "serveur",
-    ],
-    "support": [
-        "service client",
-        "hotline",
-        "assistance",
-        "sav",
-        "help",
-        "support",
-        "ticket",
-    ],
-}
-
-URGENCY_PATTERNS = [
-    r"\burgent[e]?\b",
-    r"\bimpossible\b",
-    r"\bdepuis\s+\d+\s*(?:jours?|heures?)",
-    r"\bdepuis\s+(?:hier|ce matin)\b",
-    r"\bhelp\b",
-    r"\bsvp\b",
-    r"\basap\b",
-    r"\bperdu\b",
-    r"\baucun service\b",
+AUTO_REPLY_SNIPPETS = [
+    "la messagerie privée x n’est plus disponible",
+    "dm pour échanger vos informations",
+    "merci de nous contacter en dm",
 ]
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Clean raw Free tweets export and enrich with annotations."
-    )
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path("data/free tweet export.csv"),
-        help="Path to the raw CSV export.",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("data/free_tweet_export_clean.csv"),
-        help="Destination path for the cleaned dataset.",
-    )
-    return parser.parse_args()
+MASS_PROMO_THRESHOLD = 3
 
 
-def load_dataset(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, keep_default_na=False, na_values=["null"])
-    # Standardize string columns
-    if "full_text" not in df.columns:
-        raise ValueError("Expected 'full_text' column not found in dataset.")
-    df["full_text"] = df["full_text"].astype(str)
-    return df
-
-
-def is_retweet(row: pd.Series) -> bool:
-    retweeted_status = row.get("retweeted_status")
-    if isinstance(retweeted_status, float) and pd.isna(retweeted_status):
-        retweeted_status = None
-    return (
-        (isinstance(retweeted_status, str) and retweeted_status.strip() != "")
-        or str(row.get("full_text", "")).strip().lower().startswith("rt @")
-    )
-
-
-def remove_retweets(df: pd.DataFrame) -> pd.DataFrame:
-    mask = df.apply(lambda row: not is_retweet(row), axis=1)
-    return df[mask].copy()
-
-
-def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
-    return df.drop_duplicates(subset=["full_text"]).copy()
-
-
-def is_on_topic(text: str) -> bool:
-    lower_text = text.lower()
-    return any(keyword in lower_text for keyword in ON_TOPIC_KEYWORDS)
-
-
-def filter_off_topic(df: pd.DataFrame) -> pd.DataFrame:
-    mask = df["full_text"].fillna("").apply(is_on_topic)
-    return df[mask].copy()
+@dataclass
+class PipelineArtifacts:
+    csv_latest: Path
+    csv_timestamped: Path
+    json_latest: Path
+    json_timestamped: Path
+    metadata_latest: Path
+    metadata_timestamped: Path
 
 
 def normalize_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
-    text_no_urls = URL_RE.sub(" ", text)
-    text_no_mentions = MENTION_RE.sub(" ", text_no_urls)
-    ascii_text = (
-        text_no_mentions.encode("ascii", "ignore").decode("ascii", errors="ignore")
-    )
-    normalized = WHITESPACE_RE.sub(" ", ascii_text)
-    return normalized.strip()
+    text = html.unescape(text)
+    text = RE_EMOJI.sub(" ", text)
+    text = RE_URL.sub(" ", text)
+    text = RE_MENTION.sub(" ", text)
+    text = RE_HASHTAG.sub("", text)
+    text = RE_NON_ALNUM.sub(" ", text)
+    text = re.sub(r"\s+", " ", text, flags=re.UNICODE).strip().lower()
+    return text
 
 
-def detect_theme(text: str) -> str:
-    if not text:
-        return "autre"
-    lower_text = text.lower()
-    detected: List[str] = []
-    for theme, keywords in THEME_KEYWORDS.items():
-        if any(keyword in lower_text for keyword in keywords):
-            detected.append(theme)
-    return ";".join(sorted(set(detected))) if detected else "autre"
+def remove_retweets(df: pd.DataFrame) -> pd.DataFrame:
+    mask = ~df["full_text"].astype(str).str.match(RT_PREFIX)
+    return df[mask].copy()
 
 
-def detect_urgency(text: str) -> bool:
-    if not text:
-        return False
-    for pattern in URGENCY_PATTERNS:
-        if re.search(pattern, text.lower()):
+def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+    if "id" in df.columns:
+        df = df.drop_duplicates(subset=["id"])
+    return df.drop_duplicates(subset=["full_text"]).copy()
+
+
+def remove_official_accounts(df: pd.DataFrame) -> pd.DataFrame:
+    if "screen_name" not in df.columns:
+        return df
+    mask = ~df["screen_name"].isin(OFFICIAL_ACCOUNTS)
+    return df[mask].copy()
+
+
+def filter_off_topic(df: pd.DataFrame) -> pd.DataFrame:
+    def is_ad_or_auto_reply(text: str) -> bool:
+        t = str(text).lower()
+        if not t.strip():
             return True
-    return False
+        if any(signature in t for signature in AD_SIGNATURES):
+            return True
+        if any(snippet in t for snippet in AUTO_REPLY_SNIPPETS):
+            return True
+        return False
+
+    mask = ~df["full_text"].apply(is_ad_or_auto_reply)
+    filtered = df[mask].copy()
+    return filtered
 
 
-def annotate_sentiment(
-    analyzer: SentimentIntensityAnalyzer, text: str
-) -> tuple[str, float]:
-    if not text:
-        return "neutre", 0.0
-    score = analyzer.polarity_scores(text)["compound"]
-    if score >= 0.05:
-        label = "positif"
-    elif score <= -0.05:
-        label = "negatif"
+def remove_mass_promotions(df: pd.DataFrame) -> pd.DataFrame:
+    if "clean_text" not in df.columns:
+        return df
+    counts = df["clean_text"].value_counts()
+    promo_texts = [
+        text for text, count in counts.items()
+        if count >= MASS_PROMO_THRESHOLD and ("free" in text or "freebox" in text)
+    ]
+    if not promo_texts:
+        return df
+    mask = ~df["clean_text"].isin(promo_texts)
+    return df[mask].copy()
+
+
+def load_dataset(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix in {".xls", ".xlsx"}:
+        df = pd.read_excel(path)
     else:
-        label = "neutre"
-    return label, float(score)
+        df = pd.read_csv(path)
+    if "full_text" not in df.columns:
+        raise ValueError("Expected column 'full_text' in dataset.")
+    return df
 
 
 def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
     df = df.dropna(subset=["full_text"])
     df = remove_retweets(df)
+    df = remove_official_accounts(df)
     df = drop_duplicates(df)
     df = filter_off_topic(df)
 
-    analyzer = SentimentIntensityAnalyzer()
-    clean_texts = df["full_text"].apply(normalize_text)
-    df["clean_text"] = clean_texts
+    if "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+        df["date_iso"] = df["created_at"].dt.tz_convert(None)
 
-    sentiments = clean_texts.apply(lambda text: annotate_sentiment(analyzer, text))
-    df["sentiment_label"] = sentiments.apply(lambda tup: tup[0])
-    df["sentiment_score"] = sentiments.apply(lambda tup: tup[1])
+    df["clean_text"] = df["full_text"].apply(normalize_text)
+    df = df.drop_duplicates(subset=["clean_text"])
+    df = remove_mass_promotions(df)
 
-    df["theme"] = clean_texts.apply(detect_theme)
-    df["urgent"] = clean_texts.apply(detect_urgency)
+    useful_cols = [
+        "id",
+        "date_iso",
+        "screen_name",
+        "full_text",
+        "clean_text",
+        "favorite_count",
+        "reply_count",
+    ]
+    available_cols = [col for col in useful_cols if col in df.columns]
+    return df[available_cols].reset_index(drop=True)
 
-    df["has_media"] = df.get("media", "").apply(
-        lambda media: bool(media) and str(media) != "[]"
+
+def prepare_artifacts(base_name: str, output_dir: Path, results_dir: Path, timestamp: str) -> PipelineArtifacts:
+    csv_latest = output_dir / f"{base_name}-latest.csv"
+    csv_timestamped = output_dir / f"{base_name}-{timestamp}.csv"
+    json_latest = output_dir / f"{base_name}-latest.json"
+    json_timestamped = output_dir / f"{base_name}-{timestamp}.json"
+    metadata_latest = results_dir / f"{base_name}-latest.json"
+    metadata_timestamped = results_dir / f"{base_name}-{timestamp}.json"
+    return PipelineArtifacts(
+        csv_latest=csv_latest,
+        csv_timestamped=csv_timestamped,
+        json_latest=json_latest,
+        json_timestamped=json_timestamped,
+        metadata_latest=metadata_latest,
+        metadata_timestamped=metadata_timestamped,
     )
-    df["text_length"] = clean_texts.str.len()
 
-    return df.reset_index(drop=True)
+
+def serialize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    serializable = df.copy()
+    for column in serializable.columns:
+        series = serializable[column]
+        if pd_types.is_datetime64_any_dtype(series):
+            serializable[column] = series.dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return serializable.where(pd.notnull(serializable), None)
+
+
+def write_dataframe_outputs(df: pd.DataFrame, artifacts: PipelineArtifacts) -> None:
+    df.to_csv(artifacts.csv_latest, index=False)
+    df.to_csv(artifacts.csv_timestamped, index=False)
+
+    records = serialize_dataframe(df).to_dict(orient="records")
+
+    for path in (artifacts.json_latest, artifacts.json_timestamped):
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(records, handle, ensure_ascii=False, indent=2)
+
+
+def build_metadata(
+    df_raw: pd.DataFrame,
+    df_clean: pd.DataFrame,
+    artifacts: PipelineArtifacts,
+    input_path: Path,
+    timestamp: str,
+) -> Dict[str, object]:
+    clean_lengths = df_clean["clean_text"].str.len() if "clean_text" in df_clean.columns else pd.Series(dtype=int)
+    stats = {
+        "avg_clean_length": float(clean_lengths.mean()) if not clean_lengths.empty else 0.0,
+        "median_clean_length": float(clean_lengths.median()) if not clean_lengths.empty else 0.0,
+        "unique_screen_names": int(df_clean["screen_name"].nunique()) if "screen_name" in df_clean.columns else 0,
+    }
+
+    return {
+        "input_file": str(input_path),
+        "records_in": int(len(df_raw)),
+        "records_out": int(len(df_clean)),
+        "removed": int(len(df_raw) - len(df_clean)),
+        "timestamp_utc": timestamp,
+        "outputs": {
+            "csv_latest": str(artifacts.csv_latest),
+            "csv_timestamped": str(artifacts.csv_timestamped),
+            "json_latest": str(artifacts.json_latest),
+            "json_timestamped": str(artifacts.json_timestamped),
+        },
+        "stats": stats,
+    }
+
+
+def write_metadata(metadata: Dict[str, object], artifacts: PipelineArtifacts) -> None:
+    for path in (artifacts.metadata_latest, artifacts.metadata_timestamped):
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, ensure_ascii=False, indent=2)
+
+
+def sanitize_base_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower()
+    return cleaned or "tweets_clean"
+
+
+def parse_args() -> argparse.Namespace:
+    default_input = Path(__file__).resolve().parent / "data" / "free tweet export.csv"
+    parser = argparse.ArgumentParser(description="Nettoyage et enrichissement des tweets Free.")
+    parser.add_argument("--input", type=Path, default=default_input, help="Chemin du fichier CSV/XLSX à nettoyer.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent / "data" / "cleaned",
+        help="Répertoire où stocker les CSV/JSON nettoyés.",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent / "data" / "results",
+        help="Répertoire pour les métadonnées de run.",
+    )
+    parser.add_argument("--name", type=str, default=None, help="Nom de base des fichiers de sortie.")
+    return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    input_path = args.input
-    output_path = args.output
+    input_path = args.input.expanduser().resolve()
+    output_dir = args.output_dir.expanduser().resolve()
+    results_dir = args.results_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    df_raw = load_dataset(input_path)
-    df_clean = clean_dataset(df_raw)
+    base_name = sanitize_base_name(args.name or input_path.stem)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    artifacts = prepare_artifacts(base_name, output_dir, results_dir, timestamp)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df_clean.to_csv(output_path, index=False)
-    print(
-        f"✅ Clean dataset saved to {output_path} ({len(df_clean)} tweets after filtering)"
-    )
+    print(f"📥 Chargement du dataset depuis {input_path}")
+    df_raw = load_dataset(input_path)
+    print(f"   -> {len(df_raw)} lignes brutes")
+
+    df_clean = clean_dataset(df_raw)
+    print(f"✅ Dataset nettoyé : {len(df_clean)} lignes conservées")
+
+    write_dataframe_outputs(df_clean, artifacts)
+    metadata = build_metadata(df_raw, df_clean, artifacts, input_path, timestamp)
+    write_metadata(metadata, artifacts)
+
+    print("📦 Fichiers générés :")
+    print(f"   CSV latest : {artifacts.csv_latest}")
+    print(f"   CSV horodaté : {artifacts.csv_timestamped}")
+    print(f"   JSON latest : {artifacts.json_latest}")
+    print(f"   JSON horodaté : {artifacts.json_timestamped}")
+    print(f"   Résumé : {artifacts.metadata_timestamped}")
 
 
 if __name__ == "__main__":

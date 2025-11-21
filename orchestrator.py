@@ -15,10 +15,10 @@ from monitoring.gpu_watchdog import GPUWatcher, capture_nvidia_smi
 from utils_runtime import call_native_generate
 
 # --- Configuration Defaults ---
-INPUT_CSV = "data/free tweet export.csv"
+INPUT_CSV = "data/cleaned/free_tweet_export-latest.csv"
 RESULTS_DIR = "data/results"
-MAX_ROWS = 6000
-MODEL_NAME = "llama3.2:3b"
+MAX_ROWS = 10
+MODEL_NAME = "llama3.2:1b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
@@ -38,7 +38,7 @@ class PipelineConfig:
     enable_live_log: bool = True
     gpu_mem_floor_mb: int = 2048
     gpu_temp_ceiling_c: int = 80
-    gpu_watch_workers: int = 1
+    gpu_watch_workers: int = 4
     gpu_poll_interval_sec: float = 2.0
     watchdog_backoff_sec: float = 5.0
     metadata_tags: Dict[str, Any] = field(default_factory=dict)
@@ -220,7 +220,10 @@ def run_pipeline(
 
     rows: List[Dict[str, Any]] = []
     if not os.path.exists(config.input_csv):
-        raise FileNotFoundError(f"Input CSV file not found: {config.input_csv}")
+        raise FileNotFoundError(
+            f"Input CSV file not found: {config.input_csv}. "
+            "Run clean_free_tweets.py first or point PipelineConfig.input_csv to an existing file."
+        )
     
     with open(config.input_csv, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
