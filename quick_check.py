@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 
 import csv
 import re
@@ -14,17 +14,14 @@ from langgraph.graph import StateGraph, START, END
 from utils_runtime import call_native_generate
 from judges.mlflow_judge import run_judge_on_log
 
-
-# Configuration variables (edit as needed)
 INPUT_CSV = os.path.join("data", "free tweet export.csv")
-OUTPUT_CSV: Optional[str] = None  # None => will default under RESULTS_DIR
-LOG_CSV: Optional[str] = None     # None => will default under RESULTS_DIR
+OUTPUT_CSV: Optional[str] = None
+LOG_CSV: Optional[str] = None
 RESULTS_DIR = os.path.join("data", "results")
 MAX_ROWS: int = 100
 MODELS: List[str] = ["llama3.2:3b"]
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns")
 MLFLOW_EXPERIMENT = os.environ.get("MLFLOW_EXPERIMENT", "freemind_quick_check")
-
 
 class State(TypedDict):
     row: Dict[str, Any]
@@ -32,7 +29,6 @@ class State(TypedDict):
     text_value: str
     prompt_template: Optional[str]
     result: str
-
 
 def _extract_single_value(raw: str) -> str:
     s = (raw or "").strip()
@@ -44,7 +40,7 @@ def _extract_single_value(raw: str) -> str:
             keys = list(data.keys())
             if len(keys) == 1:
                 return str(data[keys[0]]).strip()
-            # fall back to common keys
+
             for k in [
                 "issue",
                 "status",
@@ -66,7 +62,7 @@ def _extract_single_value(raw: str) -> str:
                     if k in first:
                         return str(first.get(k, "")).strip()
             return ""
-        # primitives
+
         return str(data).strip()
     except Exception:
         pass
@@ -74,7 +70,6 @@ def _extract_single_value(raw: str) -> str:
     if m:
         return m.group(1).lower()
     return s
-
 
 def _map_to_utile(value: str) -> str:
     v = (value or "").strip().lower()
@@ -86,13 +81,10 @@ def _map_to_utile(value: str) -> str:
         return v
     return ""
 
-
 def get_text(row: Dict[str, Any]) -> str:
     return row.get("full_text", " ".join(str(v) for v in row.values() if v))
 
-
 def load_prompt_template(agent_key: str = "A1_utile") -> Optional[str]:
-    """Load a prompt template for the specified agent from JSON config."""
     try:
         with open(os.path.join("prompts", "freemind_prompts.json"), "r", encoding="utf-8") as f:
             cfg = json.load(f)
@@ -104,7 +96,6 @@ def load_prompt_template(agent_key: str = "A1_utile") -> Optional[str]:
             return template.strip() if isinstance(template, str) and template.strip() else None
     except Exception:
         return None
-
 
 def worker_node(state: State) -> Dict[str, Any]:
     model_name = state["model_name"]
@@ -123,10 +114,8 @@ def worker_node(state: State) -> Dict[str, Any]:
             "Tweet:\n" + text_value
         )
 
-    
     model_output = call_native_generate(ollama_host, model_name, prompt)
     return {"result": model_output}
-
 
 def build_graph():
     g = StateGraph(State)
@@ -134,7 +123,6 @@ def build_graph():
     g.add_edge(START, "worker")
     g.add_edge("worker", END)
     return g.compile()
-
 
 def run_quick_check(
     input_csv: str,
@@ -165,7 +153,6 @@ def run_quick_check(
     graph = build_graph()
     prompt_template = load_prompt_template("A1_utile")
 
-    # Prepare container for augmented rows (original row + single utile column)
     augmented_rows: list[Dict[str, Any]] = [dict(r) for r in rows]
     log_entries: list[Dict[str, Any]] = []
     first_model = models[0] if models else ""
@@ -227,18 +214,15 @@ def run_quick_check(
 
         mlflow.log_metric("tweets_processed", len(rows))
 
-        # Resolve default output path if not provided (place under RESULTS_DIR)
         if not output_csv:
             output_csv = os.path.join(RESULTS_DIR, f"{base_name}_results.csv")
         if not log_csv:
             log_csv = os.path.join(RESULTS_DIR, f"{base_name}_log.csv")
 
-        # Export
         out_dir = os.path.dirname(output_csv)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
 
-        # Compose final headers: original + single utile column
         extra_cols = ["A1_utile"]
         final_headers = [*fieldnames]
         for col in extra_cols:
@@ -289,7 +273,6 @@ def run_quick_check(
 
     return augmented_rows
 
-
 def main() -> None:
     run_quick_check(
         input_csv=INPUT_CSV,
@@ -299,8 +282,6 @@ def main() -> None:
         models=MODELS,
     )
 
-
 if __name__ == "__main__":
     main()
-
 

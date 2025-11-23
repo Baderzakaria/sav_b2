@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import sys
 
-# Ensure project root is importable when Streamlit runs from apps/
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
@@ -39,9 +38,55 @@ SESSION_LOCK = threading.Lock()
 SMI_HISTORY_LIMIT = 120
 LOGGER = logging.getLogger(__name__)
 
+def get_ollama_models() -> List[str]:
+
+    cache_key = "cached_ollama_models"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+
+    try:
+        result = subprocess.run(
+            ["ollama", "ls"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False
+        )
+        if result.returncode != 0:
+            return []
+
+        lines = result.stdout.strip().split("\n")
+        models = []
+
+        if len(lines) <= 1:
+
+            return []
+
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split()
+            if parts:
+                model_name = parts[0]
+
+                if model_name:
+                    models.append(model_name)
+
+        models = sorted(set(models))
+
+        st.session_state[cache_key] = models
+        return models
+
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        LOGGER.debug(f"Failed to fetch Ollama models: {e}")
+        return []
+    except Exception as e:
+        LOGGER.debug(f"Unexpected error fetching Ollama models: {e}")
+        return []
 
 def _request_streamlit_rerun(is_auto: bool = True) -> None:
-    """Ask Streamlit to rerun the current session (safe no-op outside Streamlit)."""
     ctx = get_script_run_ctx(suppress_warning=True)
     if not ctx or not ctx.script_requests:
         return
@@ -54,9 +99,8 @@ def _request_streamlit_rerun(is_auto: bool = True) -> None:
                 is_auto_rerun=is_auto,
             )
         )
-    except Exception as exc:  # pragma: no cover - defensive guardrail
+    except Exception as exc:
         LOGGER.debug("Auto-rerun request failed: %s", exc)
-
 
 def init_session_state() -> None:
     defaults = {
@@ -80,29 +124,27 @@ def init_session_state() -> None:
         "current_run_target_rows": 0,
         "gpu_watcher": None,
         "gpu_metrics": [],
-        "pipeline_status": "idle",  # idle, running, completed, error
-        "live_log_path": None,  # Path to current JSONL file
-        "jsonl_read_position": 0,  # Track last read position in JSONL file
+        "pipeline_status": "idle",
+        "live_log_path": None,
+        "jsonl_read_position": 0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-
 def start_gpu_watcher() -> None:
-    """Start background GPU monitoring thread."""
     if st.session_state.gpu_watcher is not None:
-        # Check if watcher is still alive
+
         if hasattr(st.session_state.gpu_watcher, '_threads'):
             threads_alive = any(t.is_alive() for t in st.session_state.gpu_watcher._threads)
             if threads_alive:
                 return
-        # Watcher exists but threads are dead, restart
+
         try:
             stop_gpu_watcher()
         except Exception:
             pass
-    
+
     try:
         watcher = GPUWatcher(
             mem_floor_mb=st.session_state.config_gpu_mem_floor,
@@ -110,7 +152,7 @@ def start_gpu_watcher() -> None:
             num_workers=st.session_state.config_gpu_threads,
             poll_interval_sec=st.session_state.config_gpu_poll,
         )
-        
+
         def update_metrics(kind: str, metric):
             with SESSION_LOCK:
                 entry = {
@@ -123,27 +165,23 @@ def start_gpu_watcher() -> None:
                 if "gpu_metrics" not in st.session_state:
                     st.session_state.gpu_metrics = []
                 st.session_state.gpu_metrics.append(entry)
-                # Keep last 300 entries
+
                 if len(st.session_state.gpu_metrics) > 300:
                     st.session_state.gpu_metrics.pop(0)
-        
+
         watcher.start(update_metrics)
         st.session_state.gpu_watcher = watcher
-        # Don't sleep here - it blocks the UI thread
+
     except Exception as exc:
         st.session_state.gpu_watcher = None
-        # Don't show warning here, let render_gpu_panel handle it
-
 
 def stop_gpu_watcher() -> None:
-    """Stop background GPU monitoring."""
     if st.session_state.gpu_watcher is not None:
         try:
             st.session_state.gpu_watcher.stop()
         except Exception:
             pass
         st.session_state.gpu_watcher = None
-
 
 def update_local_prompt(agent_key: str, template: str, version_label: str) -> None:
     with PROMPT_FILE.open("r", encoding="utf-8") as fp:
@@ -156,7 +194,6 @@ def update_local_prompt(agent_key: str, template: str, version_label: str) -> No
     cfg["agents"] = agents
     with PROMPT_FILE.open("w", encoding="utf-8") as fp:
         json.dump(cfg, fp, indent=2, ensure_ascii=False)
-
 
 def register_prompt_via_mlflow(agent_key: str, template: str) -> Dict[str, str]:
     try:
@@ -185,16 +222,14 @@ def register_prompt_via_mlflow(agent_key: str, template: str) -> Dict[str, str]:
     update_local_prompt(agent_key, template, version_label)
     return {"success": True, "message": f"Prompt registered as {version_label}.", "version": version_label}
 
-
 def launch_pipeline(config: PipelineConfig) -> None:
     st.session_state.run_stop_event.clear()
     st.session_state.live_entries = []
     st.session_state.current_run_target_rows = int(config.max_rows)
     st.session_state.pipeline_status = "running"
     st.session_state.run_error = ""
-    st.session_state.jsonl_read_position = 0  # Reset read position for new run
-    
-    # Store the expected live log path (will be created by orchestrator)
+    st.session_state.jsonl_read_position = 0
+
     import time
     timestamp = int(time.time())
     live_dir = config.live_log_dir or config.results_dir
@@ -204,7 +239,7 @@ def launch_pipeline(config: PipelineConfig) -> None:
     def progress(entry):
         with SESSION_LOCK:
             st.session_state.live_entries.append(entry)
-            # Add latest GPU metrics to entry if available
+
             if st.session_state.gpu_watcher:
                 latest = st.session_state.gpu_watcher.latest()
                 if latest:
@@ -227,11 +262,11 @@ def launch_pipeline(config: PipelineConfig) -> None:
                 st.session_state.last_run_result = result
                 st.session_state.run_error = ""
                 st.session_state.pipeline_status = "completed"
-                # Update live_log_path from result if available
+
                 if result and "live_log" in result and result["live_log"]:
                     st.session_state.live_log_path = result["live_log"]
             _request_streamlit_rerun(is_auto=False)
-        except Exception as exc:  # pragma: no cover - surfaced in UI
+        except Exception as exc:
             with SESSION_LOCK:
                 st.session_state.run_error = traceback.format_exc()
                 st.session_state.pipeline_status = "error"
@@ -246,10 +281,8 @@ def launch_pipeline(config: PipelineConfig) -> None:
     add_script_run_ctx(thread)
     thread.start()
 
-
 def stop_pipeline():
     st.session_state.run_stop_event.set()
-
 
 def run_dvc_command(args: List[str]) -> None:
     try:
@@ -258,7 +291,6 @@ def run_dvc_command(args: List[str]) -> None:
     except FileNotFoundError:
         output = "DVC executable not found. Install DVC or adjust PATH."
     st.session_state.dvc_logs = output.strip()
-
 
 def load_run_history(limit: int = 20) -> pd.DataFrame:
     records: List[Dict] = []
@@ -273,7 +305,6 @@ def load_run_history(limit: int = 20) -> pd.DataFrame:
             continue
     return pd.DataFrame(records)
 
-
 def render_gpu_chart(entries: List[Dict]) -> None:
     df = pd.DataFrame(entries)
     if df.empty or "gpu_util" not in df.columns:
@@ -281,19 +312,50 @@ def render_gpu_chart(entries: List[Dict]) -> None:
         return
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    color_map = {
+        "gpu_util": "#1f77b4",
+        "gpu_mem_used_mb": "#ff7f0e",
+        "gpu_temp_c": "#d62728"
+    }
+
     fig = px.line(
         df,
         x="timestamp",
         y=["gpu_util", "gpu_mem_used_mb", "gpu_temp_c"],
-        labels={"value": "Metric", "variable": "Series"},
+        labels={
+            "value": "Value",
+            "variable": "Metric",
+            "timestamp": "Time",
+        },
         title="GPU Utilization / Memory / Temperature",
+        color_discrete_map=color_map
     )
     fig.update_layout(
-        margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=40, r=20, t=40, b=40),
+        height=340,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5,
+            title=""
+        ),
+        hovermode="x unified",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, height=340)
 
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": True,
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["pan2d", "lasso2d"],
+        }
+    )
 
 def render_history_chart(history_df: pd.DataFrame) -> None:
     if history_df.empty:
@@ -310,7 +372,6 @@ def render_history_chart(history_df: pd.DataFrame) -> None:
         title="Recent Pipeline Runs",
     )
     st.plotly_chart(fig, use_container_width=True)
-
 
 def render_prompt_editor():
     st.subheader("Prompt Management")
@@ -331,7 +392,6 @@ def render_prompt_editor():
                 else:
                     st.error(result["message"])
 
-
 def render_dvc_section():
     st.subheader("DVC Actions")
     target = st.text_input("Target path", value=st.session_state.get("dvc_target_path", "data/results"), key="dvc_target_path_input")
@@ -349,25 +409,19 @@ def render_dvc_section():
     if st.session_state.dvc_logs:
         st.code(st.session_state.dvc_logs, language="bash")
 
-
 def read_jsonl_file(file_path: str, start_position: int = 0) -> tuple[List[Dict], int]:
-    """
-    Read JSONL file incrementally from a given position.
-    Returns (new_entries, new_position).
-    """
     if not file_path or not os.path.exists(file_path):
         return [], start_position
-    
+
     new_entries = []
     new_position = start_position
-    
+
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            # Seek to last known position
+
             if start_position > 0:
                 f.seek(start_position)
-            
-            # Read new lines
+
             for line in f:
                 line = line.strip()
                 if not line:
@@ -376,59 +430,48 @@ def read_jsonl_file(file_path: str, start_position: int = 0) -> tuple[List[Dict]
                     entry = json.loads(line)
                     new_entries.append(entry)
                 except json.JSONDecodeError:
-                    # Skip malformed lines
+
                     continue
-            
-            # Update position to end of file
+
             new_position = f.tell()
     except (IOError, OSError) as e:
         LOGGER.debug(f"Error reading JSONL file {file_path}: {e}")
         return [], start_position
-    
+
     return new_entries, new_position
 
-
 def find_latest_jsonl_file() -> Optional[str]:
-    """Find the most recent live_run_*.jsonl file in results directory."""
     results_dir = Path(RESULTS_DIR)
     if not results_dir.exists():
         return None
-    
+
     jsonl_files = list(results_dir.glob("live_run_*.jsonl"))
     if not jsonl_files:
         return None
-    
-    # Sort by modification time, most recent first
+
     latest = max(jsonl_files, key=lambda p: p.stat().st_mtime)
     return str(latest)
 
-
 def get_live_entries_from_file() -> List[Dict]:
-    """
-    Read live entries from JSONL file, combining with session state entries.
-    This ensures we get real-time updates even if callbacks miss some entries.
-    """
-    live_entries = list(st.session_state.live_entries)  # Start with callback entries
+    live_entries = list(st.session_state.live_entries)
     live_log_path = st.session_state.get("live_log_path")
-    
-    # Fallback: find latest JSONL file if path not set
+
     if not live_log_path or not os.path.exists(live_log_path):
         latest_file = find_latest_jsonl_file()
         if latest_file:
             live_log_path = latest_file
             st.session_state.live_log_path = latest_file
-            st.session_state.jsonl_read_position = 0  # Reset position for new file
-    
+            st.session_state.jsonl_read_position = 0
+
     if live_log_path and os.path.exists(live_log_path):
-        # Read new entries from file
+
         read_pos = st.session_state.get("jsonl_read_position", 0)
         new_entries, new_position = read_jsonl_file(live_log_path, read_pos)
-        
+
         if new_entries:
-            # Update session state position
+
             st.session_state.jsonl_read_position = new_position
-            
-            # Merge new entries (avoid duplicates by row_index)
+
             existing_indices = {e.get("row_index") for e in live_entries if e.get("row_index")}
             for entry in new_entries:
                 row_idx = entry.get("row_index")
@@ -436,31 +479,26 @@ def get_live_entries_from_file() -> List[Dict]:
                     live_entries.append(entry)
                     existing_indices.add(row_idx)
                 elif not row_idx:
-                    # If no row_index, append anyway (shouldn't happen but be safe)
+
                     live_entries.append(entry)
-            
-            # Sort by row_index if available
+
             if all(e.get("row_index") for e in live_entries):
                 live_entries.sort(key=lambda x: x.get("row_index", 0))
-    
-    return live_entries
 
+    return live_entries
 
 def render_live_results():
     st.subheader("Live Run Output")
     running = st.session_state.run_thread is not None and st.session_state.run_thread.is_alive()
-    
-    # Read entries from file in real-time
+
     live_entries = get_live_entries_from_file()
-    
-    # Update session state for backward compatibility
+
     if live_entries:
         st.session_state.live_entries = live_entries
-    
+
     rows_done = len(live_entries)
     target_rows = max(st.session_state.get("current_run_target_rows", rows_done), 1)
-    
-    # Status indicator
+
     status = st.session_state.get("pipeline_status", "idle")
     status_colors = {
         "idle": "⚪",
@@ -474,16 +512,14 @@ def render_live_results():
         "completed": "Completed",
         "error": "Error"
     }
-    
-    # Show file source info
+
     live_log_path = st.session_state.get("live_log_path")
     status_display = f"Status: {status_colors.get(status, '⚪')} {status_text.get(status, 'Unknown')}"
     if live_log_path and os.path.exists(live_log_path):
         file_size = os.path.getsize(live_log_path)
         status_display += f" | 📄 Reading from: {os.path.basename(live_log_path)} ({file_size:,} bytes)"
     st.caption(status_display)
-    
-    # Progress bar
+
     if target_rows > 0:
         progress_value = min(rows_done / target_rows, 1.0)
         progress_text = f"{rows_done} / {target_rows} rows processed"
@@ -493,13 +529,12 @@ def render_live_results():
     else:
         st.progress(0.0, text="Not started")
 
-    # Streaming output
     stream_container = st.container()
     with stream_container:
         if live_entries:
             st.caption("📊 Streaming feed (latest 50 rows)")
             stream_placeholder = st.empty()
-            
+
             def stream_generator():
                 for entry in live_entries[-50:]:
                     summary = {
@@ -509,19 +544,17 @@ def render_live_results():
                         "categorie": entry.get("Final_categorie"),
                         "sentiment": entry.get("Final_sentiment"),
                         "gravity": entry.get("Final_gravity"),
-                        "status": entry.get("status"),  # Show status from JSON
+                        "status": entry.get("status"),
                         "elapsed_sec": entry.get("elapsed_sec"),
                     }
                     yield json.dumps(summary, ensure_ascii=False) + "\n"
-            
+
             stream_placeholder.write_stream(stream_generator)
-            
-            # Data table
+
             if len(live_entries) > 0:
                 live_df = pd.DataFrame(live_entries)
                 st.dataframe(live_df.tail(50), use_container_width=True, height=400)
-                
-                # GPU chart if we have GPU data
+
                 if any("gpu_util" in e for e in live_entries):
                     render_gpu_chart(live_entries)
         else:
@@ -532,7 +565,6 @@ def render_live_results():
             else:
                 st.info("📋 No rows processed yet. Launch a run to start processing.")
 
-
 def render_run_history():
     st.subheader("Run History")
     history_df = load_run_history()
@@ -540,9 +572,8 @@ def render_run_history():
     if not history_df.empty:
         st.dataframe(history_df.head(10), use_container_width=True)
 
-
 def latest_gpu_entry() -> Optional[Dict]:
-    # First try to get from GPU watcher (most recent)
+
     if st.session_state.gpu_watcher:
         try:
             latest = st.session_state.gpu_watcher.latest()
@@ -555,21 +586,19 @@ def latest_gpu_entry() -> Optional[Dict]:
                 }
         except Exception:
             pass
-    
-    # Fallback to GPU metrics from session state
+
     if st.session_state.get("gpu_metrics"):
         metrics = st.session_state.gpu_metrics
         if metrics and len(metrics) > 0:
             latest = metrics[-1]
             if latest.get("gpu_util") is not None:
                 return latest
-    
-    # Try parsing from nvidia-smi snapshot history
+
     if st.session_state.get("smi_history"):
         history = st.session_state.smi_history
         if history and len(history) > 0:
             latest_smi = history[-1]
-            # Check if we have valid metrics
+
             if latest_smi.get("gpu_util") is not None or latest_smi.get("mem_used_mb") is not None:
                 return {
                     "gpu_util": latest_smi.get("gpu_util", 0),
@@ -577,32 +606,25 @@ def latest_gpu_entry() -> Optional[Dict]:
                     "gpu_mem_total_mb": latest_smi.get("mem_total_mb", 0),
                     "gpu_temp_c": latest_smi.get("temperature", 0),
                 }
-    
-    # Last resort: check live entries
+
     for entry in reversed(st.session_state.live_entries):
         if all(k in entry for k in ("gpu_util", "gpu_mem_used_mb", "gpu_temp_c")):
             if entry.get("gpu_util") is not None:
                 return entry
     return None
 
-
 def record_smi_snapshot(snapshot: str) -> None:
-    """Parse nvidia-smi output and record metrics."""
     if not snapshot or "NVIDIA-SMI" not in snapshot:
         return
-    
+
     history = st.session_state.get("smi_history", [])
-    
-    # More flexible regex patterns for nvidia-smi
-    # Memory: "1234MiB / 8192MiB" or "1234 / 8192 MiB"
+
     mem_match = re.search(r"(\d+)\s*MiB\s*/\s*(\d+)\s*MiB", snapshot) or re.search(r"(\d+)\s*/\s*(\d+)\s*MiB", snapshot)
-    
-    # GPU Util: "45% Default" or "45 %"
+
     util_match = re.search(r"(\d+)\s*%\s+Default", snapshot) or re.search(r"(\d+)\s*%", snapshot.split("\n")[0])
-    
-    # Temperature: "| 65C" or "65C" or "65 C"
+
     temp_match = re.search(r"\|\s*(\d+)\s*C", snapshot) or re.search(r"(\d+)\s*C", snapshot)
-    
+
     entry = {
         "timestamp": time.time(),
         "gpu_util": float(util_match.group(1)) if util_match else None,
@@ -610,24 +632,22 @@ def record_smi_snapshot(snapshot: str) -> None:
         "mem_total_mb": float(mem_match.group(2)) if mem_match else None,
         "temperature": float(temp_match.group(1)) if temp_match else None,
     }
-    
-    # Only add if we got at least one metric
+
     if any(v is not None for v in [entry["gpu_util"], entry["mem_used_mb"], entry["temperature"]]):
         history.append(entry)
         history = history[-SMI_HISTORY_LIMIT:]
         st.session_state["smi_history"] = history
 
-
 def render_smi_history():
     history = st.session_state.get("smi_history", [])
     if not history:
-        st.info("nvidia-smi history will appear once metrics are captured.")
+        st.info("📊 nvidia-smi history will appear once metrics are captured.")
         return
     df = pd.DataFrame(history)
-    # Ensure proper dtypes
+
     for col in ["gpu_util", "mem_used_mb", "temperature"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    # Convert timestamp - handle both float (Unix timestamp) and datetime
+
     if df["timestamp"].dtype == "float64" or df["timestamp"].dtype == "int64":
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
     else:
@@ -639,19 +659,82 @@ def render_smi_history():
         value_name="value",
     ).dropna(subset=["value"])
     if df_long.empty:
-        st.info("nvidia-smi history will appear once metrics are captured.")
+        st.info("📊 nvidia-smi history will appear once metrics are captured.")
         return
-    fig = px.line(df_long, x="timestamp", y="value", color="metric", title="nvidia-smi Timeline")
-    fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig, use_container_width=True, height=260)
 
+    color_map = {
+        "gpu_util": "#1f77b4",
+        "mem_used_mb": "#ff7f0e",
+        "temperature": "#d62728"
+    }
+
+    fig = px.line(
+        df_long,
+        x="timestamp",
+        y="value",
+        color="metric",
+        labels={
+            "value": "Value",
+            "metric": "Metric",
+            "timestamp": "Time",
+        },
+        title="",
+        color_discrete_map=color_map
+    )
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=400,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+            title=""
+        ),
+        xaxis_title="Time",
+        yaxis_title="Value",
+        hovermode="x unified",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": True,
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["pan2d", "lasso2d"],
+        }
+    )
 
 def render_run_controls():
     running = st.session_state.run_thread is not None and st.session_state.run_thread.is_alive()
     st.subheader("Run Controls")
-    preset_models = ["llama3.2:3b", "mistral:latest", "llama3.1:8b"]
+
+    available_models = get_ollama_models()
     current_model = st.session_state.get("config_model", MODEL_NAME)
-    default_choice = current_model if current_model in preset_models else "Custom"
+
+    if not available_models:
+        available_models = ["llama3.2:3b", "mistral:latest", "llama3.1:8b"]
+        if st.session_state.get("ollama_models_warning_shown", False) == False:
+            st.warning("⚠️ Could not fetch models from Ollama. Using default presets. Make sure Ollama is running and 'ollama ls' works.")
+            st.session_state.ollama_models_warning_shown = True
+
+    if current_model in available_models:
+        default_choice = current_model
+    else:
+        default_choice = available_models[0] if available_models else "Custom"
+
+    model_col1, model_col2 = st.columns([4, 1])
+    with model_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", use_container_width=True, help="Refresh model list from 'ollama ls'"):
+
+            if "cached_ollama_models" in st.session_state:
+                del st.session_state.cached_ollama_models
+            st.rerun()
 
     with st.form("run_control_form"):
         st.text_input("Input CSV", key="config_input_csv", value=st.session_state.get("config_input_csv", INPUT_CSV))
@@ -661,23 +744,36 @@ def render_run_controls():
             max_value=10000,
             key="config_max_rows",
         )
-        model_options = preset_models + ["Custom"]
+
+        model_options = available_models + ["Custom"]
+        try:
+            default_index = model_options.index(default_choice)
+        except ValueError:
+            default_index = 0
+
         model_choice = st.selectbox(
-            "Model preset",
+            "🤖 Ollama Model",
             options=model_options,
-            index=model_options.index(default_choice),
+            index=default_index,
             key="config_model_choice",
+            help="Select from available Ollama models (fetched from 'ollama ls') or choose Custom to enter a model name manually.",
         )
+
         if model_choice == "Custom":
-            custom_default = current_model if default_choice == "Custom" else st.session_state.get("config_model_custom", "")
+            custom_default = current_model if current_model not in available_models else st.session_state.get("config_model_custom", "")
             st.text_input(
                 "Custom model name",
                 key="config_model_custom",
                 value=custom_default,
+                help="Enter any Ollama model name (e.g., 'llama3.2:3b', 'mistral:latest')",
             )
             st.session_state.config_model = st.session_state.config_model_custom
         else:
             st.session_state.config_model = model_choice
+
+        if available_models:
+            st.caption(f"📋 Found {len(available_models)} model(s) from Ollama")
+
         st.toggle("Parallel agents (5)", key="config_parallel_agents", help="Agents already execute in parallel; toggle for bookkeeping.")
         start_clicked = st.form_submit_button("Launch Run", disabled=running)
 
@@ -706,7 +802,6 @@ def render_run_controls():
         launch_pipeline(config)
         st.success("Run started.")
 
-    # Option to run the exact CLI-style defaults (PipelineConfig with no overrides)
     if st.button("Launch Default (CLI) Run", disabled=running, use_container_width=True):
         launch_pipeline(PipelineConfig())
         st.success("Default run started (same as `python orchestrator.py`).")
@@ -714,14 +809,12 @@ def render_run_controls():
     if st.button("Stop Run", disabled=not running, use_container_width=True):
         stop_pipeline()
         st.warning("Stop signal sent.")
-    
-    # Show error if any
+
     if st.session_state.get("run_error"):
         st.error("❌ Pipeline Error")
         with st.expander("Error Details", expanded=True):
             st.code(st.session_state["run_error"], language="python")
-    
-    # Show last run result summary
+
     if st.session_state.last_run_result and not running:
         with st.expander("Last Run Summary", expanded=False):
             result = st.session_state.last_run_result
@@ -733,86 +826,146 @@ def render_run_controls():
                 "stopped_early": result.get("stopped_early", False),
             })
 
-
 def render_gpu_panel():
-    st.subheader("GPU & Watchdog")
-    
-    # Auto-start GPU watcher if not running
+
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.markdown("### 🖥️ GPU & Watchdog")
+    with header_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+
     watcher_error = None
     if st.session_state.gpu_watcher is None:
         try:
             start_gpu_watcher()
         except Exception as exc:
             watcher_error = str(exc)
-    
-    # Show status and error if any
-    if watcher_error:
-        st.error(f"⚠️ GPU monitoring unavailable: {watcher_error}")
-        st.info("💡 Install pynvml: `pip install pynvml` or use nvidia-smi snapshot below")
-    elif st.session_state.gpu_watcher:
-        # Check if threads are alive
-        try:
-            threads_alive = any(t.is_alive() for t in st.session_state.gpu_watcher._threads) if hasattr(st.session_state.gpu_watcher, '_threads') else False
-            watcher_status = "🟢 Active" if threads_alive else "🟡 Starting..."
-            st.caption(f"GPU Watcher: {watcher_status}")
-        except Exception:
-            st.caption("GPU Watcher: 🟢 Active")
-    else:
-        st.caption("GPU Watcher: ⚪ Inactive")
-    
+
+    status_container = st.container()
+    with status_container:
+        if watcher_error:
+            st.error(f"⚠️ **GPU monitoring unavailable:** {watcher_error}")
+            st.info("💡 Install pynvml: `pip install pynvml` or use nvidia-smi snapshot below")
+        elif st.session_state.gpu_watcher:
+            try:
+                threads_alive = any(t.is_alive() for t in st.session_state.gpu_watcher._threads) if hasattr(st.session_state.gpu_watcher, '_threads') else False
+                if threads_alive:
+                    st.success("🟢 **GPU Watcher: Active**")
+                else:
+                    st.warning("🟡 **GPU Watcher: Starting...**")
+            except Exception:
+                st.success("🟢 **GPU Watcher: Active**")
+        else:
+            st.info("⚪ **GPU Watcher: Inactive**")
+
+    st.markdown("---")
+
     latest = latest_gpu_entry()
-    metric_cols = st.columns(3)
-    
+
     if latest:
-        metric_cols[0].metric("GPU Util %", f"{latest['gpu_util']:.0f}%")
-        mem_display = f"{latest['gpu_mem_used_mb']:.0f}/{latest.get('gpu_mem_total_mb', 0):.0f} MB"
-        metric_cols[1].metric("VRAM Used", mem_display)
-        metric_cols[2].metric("Temp °C", f"{latest['gpu_temp_c']:.0f}")
+
+        mem_total = latest.get('gpu_mem_total_mb', 1)
+        mem_used = latest.get('gpu_mem_used_mb', 0)
+        mem_percent = (mem_used / mem_total * 100) if mem_total > 0 else 0
+
+        metric_cols = st.columns(4)
+
+        with metric_cols[0]:
+            st.markdown("#### 📊 GPU Utilization")
+            st.markdown(f"### {latest['gpu_util']:.0f}%")
+
+            st.progress(latest['gpu_util'] / 100, text="")
+
+        with metric_cols[1]:
+            st.markdown("#### 💾 VRAM Usage")
+            st.markdown(f"### {mem_used:.0f} / {mem_total:.0f} MB")
+            st.progress(mem_percent / 100, text=f"{mem_percent:.1f}%")
+
+        with metric_cols[2]:
+            st.markdown("#### 🌡️ Temperature")
+            temp = latest['gpu_temp_c']
+            temp_color = "🟢" if temp < 70 else "🟡" if temp < 80 else "🔴"
+            st.markdown(f"### {temp_color} {temp:.0f}°C")
+
+            temp_progress = min(temp / 90, 1.0)
+            st.progress(temp_progress, text="")
+
+        with metric_cols[3]:
+            st.markdown("#### 🔄 Free Memory")
+            free_mem = mem_total - mem_used
+            st.markdown(f"### {free_mem:.0f} MB")
+            free_percent = (free_mem / mem_total * 100) if mem_total > 0 else 0
+            st.progress(free_percent / 100, text=f"{free_percent:.1f}%")
     else:
-        metric_cols[0].metric("GPU Util %", "--")
-        metric_cols[1].metric("VRAM Used", "--")
-        metric_cols[2].metric("Temp °C", "--")
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
+            st.markdown("#### 📊 GPU Utilization")
+            st.markdown("### --")
+        with metric_cols[1]:
+            st.markdown("#### 💾 VRAM Usage")
+            st.markdown("### --")
+        with metric_cols[2]:
+            st.markdown("#### 🌡️ Temperature")
+            st.markdown("### --")
+        with metric_cols[3]:
+            st.markdown("#### 🔄 Free Memory")
+            st.markdown("### --")
         if not watcher_error:
             st.info("⏳ Waiting for GPU metrics... (checking nvidia-smi)")
 
-    control_col, snapshot_col = st.columns(2)
-    with control_col:
-        workers = st.slider(
-            "GPU multithreading (watchdog workers)",
-            min_value=1,
-            max_value=4,
-            key="config_gpu_threads",
-            help="Number of watcher threads sampling GPU metrics.",
-        )
-        mem_floor = st.slider(
-            "GPU free memory floor (MB)",
-            min_value=512,
-            max_value=8192,
-            step=256,
-            key="config_gpu_mem_floor",
-            help="Pipeline will pause if free GPU memory drops below this threshold.",
-        )
-        poll_interval = st.number_input(
-            "Watchdog poll interval (sec)",
-            min_value=0.5,
-            max_value=10.0,
-            step=0.5,
-            key="config_gpu_poll",
-            help="Lower values capture GPU spikes faster at the cost of CPU overhead.",
-        )
-        temp_ceiling = st.slider(
-            "GPU temperature ceiling (°C)",
-            min_value=60,
-            max_value=90,
-            step=5,
-            key="config_gpu_temp",
-            help="Alert if GPU temperature exceeds this value.",
-        )
-        
-        # Restart watcher if config changed
+    st.markdown("---")
+
+    tab_controls, tab_snapshot, tab_timeline = st.tabs(["⚙️ Configuration", "📋 NVIDIA-SMI", "📈 Timeline"])
+
+    with tab_controls:
+        st.markdown("#### Watchdog Settings")
+        st.markdown("Configure GPU monitoring thresholds and polling behavior.")
+
+        control_col1, control_col2 = st.columns(2)
+
+        with control_col1:
+            workers = st.slider(
+                "🔧 GPU Multithreading (Watchdog Workers)",
+                min_value=1,
+                max_value=4,
+                value=st.session_state.get("config_gpu_threads", 1),
+                key="config_gpu_threads",
+                help="Number of watcher threads sampling GPU metrics. More threads = more frequent sampling.",
+            )
+
+            mem_floor = st.slider(
+                "💾 GPU Free Memory Floor (MB)",
+                min_value=512,
+                max_value=8192,
+                step=256,
+                value=st.session_state.get("config_gpu_mem_floor", 2048),
+                key="config_gpu_mem_floor",
+                help="Pipeline will pause if free GPU memory drops below this threshold.",
+            )
+
+        with control_col2:
+            poll_interval = st.number_input(
+                "⏱️ Watchdog Poll Interval (seconds)",
+                min_value=0.5,
+                max_value=10.0,
+                step=0.5,
+                value=st.session_state.get("config_gpu_poll", 2.0),
+                key="config_gpu_poll",
+                help="Lower values capture GPU spikes faster at the cost of CPU overhead.",
+            )
+
+            temp_ceiling = st.slider(
+                "🌡️ GPU Temperature Ceiling (°C)",
+                min_value=60,
+                max_value=90,
+                step=5,
+                value=st.session_state.get("config_gpu_temp", 80),
+                key="config_gpu_temp",
+                help="Alert if GPU temperature exceeds this value.",
+            )
+
         if st.session_state.gpu_watcher:
             try:
-                # Update watcher config
                 watcher = st.session_state.gpu_watcher
                 watcher.mem_floor_mb = mem_floor
                 watcher.temp_ceiling_c = temp_ceiling
@@ -820,50 +973,91 @@ def render_gpu_panel():
                 watcher.num_workers = workers
             except Exception:
                 pass
-    
-    with snapshot_col:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.caption("Current nvidia-smi snapshot")
-        with col2:
-            if st.button("🔄 Refresh", use_container_width=True):
-                # Force refresh GPU metrics
+
+    with tab_snapshot:
+        st.markdown("#### Current NVIDIA-SMI Snapshot")
+
+        refresh_col1, refresh_col2 = st.columns([4, 1])
+        with refresh_col1:
+            st.caption("Raw output from nvidia-smi command")
+        with refresh_col2:
+            if st.button("🔄 Refresh", use_container_width=True, type="primary"):
                 snapshot = capture_nvidia_smi()
                 record_smi_snapshot(snapshot)
                 st.rerun()
-        
+
         snapshot = capture_nvidia_smi()
-        st.text_area(
-            "nvidia-smi",
-            value=snapshot,
-            height=220,
-            label_visibility="collapsed",
-            key="nvidia_smi_display",
+        st.code(
+            snapshot,
+            language="bash",
         )
-        # Always record snapshot to ensure metrics are available
+
         record_smi_snapshot(snapshot)
-        
-        # Show GPU metrics timeline from watcher
+
+    with tab_timeline:
+        st.markdown("#### GPU Metrics Timeline")
+        st.caption("Real-time visualization of GPU utilization, memory usage, and temperature")
+
         if st.session_state.gpu_metrics:
             gpu_df = pd.DataFrame(st.session_state.gpu_metrics[-100:])
             if not gpu_df.empty:
                 gpu_df["timestamp"] = pd.to_datetime(gpu_df["timestamp"], unit="s")
+
+                color_map = {
+                    "gpu_util": "#1f77b4",
+                    "gpu_mem_used_mb": "#ff7f0e",
+                    "gpu_temp_c": "#d62728"
+                }
+
                 fig = px.line(
                     gpu_df,
                     x="timestamp",
                     y=["gpu_util", "gpu_mem_used_mb", "gpu_temp_c"],
-                    labels={"value": "Metric", "variable": "Series"},
-                    title="Live GPU Metrics Timeline",
+                    labels={
+                        "value": "Value",
+                        "variable": "Metric",
+                        "timestamp": "Time",
+                        "gpu_util": "GPU Utilization (%)",
+                        "gpu_mem_used_mb": "Memory Used (MB)",
+                        "gpu_temp_c": "Temperature (°C)"
+                    },
+                    title="",
+                    color_discrete_map={
+                        "gpu_util": color_map["gpu_util"],
+                        "gpu_mem_used_mb": color_map["gpu_mem_used_mb"],
+                        "gpu_temp_c": color_map["gpu_temp_c"]
+                    }
                 )
+
                 fig.update_layout(
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    height=200,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=40, r=20, t=20, b=40),
+                    height=400,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=-0.25,
+                        xanchor="center",
+                        x=0.5,
+                        title=""
+                    ),
+                    xaxis_title="Time",
+                    yaxis_title="Value",
+                    hovermode="x unified",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(fig, use_container_width=True, height=200)
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "displayModeBar": True,
+                        "displaylogo": False,
+                        "modeBarButtonsToRemove": ["pan2d", "lasso2d"],
+                    }
+                )
         else:
             render_smi_history()
-
 
 def render_admin_panel():
     st.subheader("Artifacts & DVC")
@@ -875,30 +1069,25 @@ def render_admin_panel():
     else:
         st.info("No run metadata yet.")
 
-
 def render_last_run_summary():
     if st.session_state.last_run_result:
         st.json(st.session_state.last_run_result)
     else:
         st.info("Run the pipeline to see summary data.")
 
-
 def main():
     init_session_state()
-    
-    # Initialize GPU watcher early - before any rendering
+
     if st.session_state.gpu_watcher is None:
         try:
             start_gpu_watcher()
         except Exception:
-            pass  # GPU monitoring optional
-    
-    # Check if pipeline is running
+            pass
+
     running = st.session_state.run_thread is not None and st.session_state.run_thread.is_alive()
-    
-    # Auto-refresh mechanism for real-time updates
+
     if running:
-        # Use st.empty() for auto-refreshing content
+
         auto_refresh_placeholder = st.empty()
         with auto_refresh_placeholder.container():
             col1, col2, col3 = st.columns([8, 1, 1])
@@ -911,28 +1100,26 @@ def main():
                 if st.button("⏸️ Pause", help="Pause auto-refresh", use_container_width=True):
                     st.session_state.auto_refresh_paused = not st.session_state.get("auto_refresh_paused", False)
                     st.rerun()
-        
-        # Auto-refresh when not paused
+
         if not st.session_state.get("auto_refresh_paused", False):
-            time.sleep(2.0)  # Wait 2 seconds for new data
+            time.sleep(2.0)
             st.rerun()
     else:
-        # Clear pause state when not running
+
         if st.session_state.get("auto_refresh_paused", False):
             st.session_state.auto_refresh_paused = False
 
     st.title("Experiment Control & Watchdog")
     st.caption("Launch orchestrations, edit prompts, monitor GPU, and manage DVC artifacts.")
 
-    # Line 1: GPU & Watchdog (full width, splits its own inner columns) - FIRST
     render_gpu_panel()
 
     st.divider()
-    # Line 2: Run controls (full width)
+
     render_run_controls()
 
     st.divider()
-    # Line 3: Artifacts & DVC
+
     render_admin_panel()
 
     tab_live, tab_prompts, tab_history, tab_summary = st.tabs(
@@ -946,7 +1133,6 @@ def main():
         render_run_history()
     with tab_summary:
         render_last_run_summary()
-
 
 if __name__ == "__main__":
     main()

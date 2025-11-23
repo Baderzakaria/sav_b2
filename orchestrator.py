@@ -14,17 +14,14 @@ from mlflow.tracing.fluent import start_span
 from monitoring.gpu_watchdog import GPUWatcher, capture_nvidia_smi
 from utils_runtime import call_native_generate
 
-# --- Configuration Defaults ---
 INPUT_CSV = "data/cleaned/free_tweet_export-latest.csv"
 RESULTS_DIR = "data/results"
-MAX_ROWS = 50
+MAX_ROWS = 3087
 MODEL_NAME = "llama3.2:3b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
 
-
-# --- Data Classes ---
 @dataclass
 class PipelineConfig:
     input_csv: str = INPUT_CSV
@@ -52,10 +49,8 @@ class PipelineConfig:
     adaptive_mem_floor_slack_mb: int = 1024
     adaptive_mem_floor_min_mb: int = 1024
 
-
 def ensure_results_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
-
 
 def load_prompts(overrides: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     with PROMPT_FILE.open("r", encoding="utf-8") as f:
@@ -67,9 +62,7 @@ def load_prompts(overrides: Optional[Dict[str, str]] = None) -> Dict[str, Dict[s
                 prompts[key]["prompt_template"] = template
     return prompts
 
-
 def run_model_warmup(config: PipelineConfig) -> None:
-    """Prime the Ollama runtime so weights stay resident in GPU memory."""
     if not config.enable_model_warmup:
         return
     prompt = (config.warmup_prompt or "").strip() or "Ping de préchauffage."
@@ -87,7 +80,6 @@ def run_model_warmup(config: PipelineConfig) -> None:
             print(f"Warmup attempt {idx + 1}/{attempts} skipped: {exc}")
             break
 
-
 def wait_for_gpu_metric(watcher: Optional[GPUWatcher], timeout: float) -> Optional[Dict[str, float]]:
     if watcher is None:
         return None
@@ -97,7 +89,6 @@ def wait_for_gpu_metric(watcher: Optional[GPUWatcher], timeout: float) -> Option
         time.sleep(min(watcher.poll_interval_sec, 0.5))
         metric = watcher.latest()
     return metric
-
 
 def adapt_gpu_mem_floor(watcher: Optional[GPUWatcher], config: PipelineConfig) -> None:
     if watcher is None or not config.enable_adaptive_mem_floor:
@@ -114,9 +105,87 @@ def adapt_gpu_mem_floor(watcher: Optional[GPUWatcher], config: PipelineConfig) -
         f"(baseline free ~{mem_free:.0f} MB)."
     )
 
-# --- Helper: Clean JSON Extraction ---
+def algorithmic_checker(
+    utile: Any,
+    categorie: Any,
+    sentiment: Any,
+    type_probleme: Any,
+    score_gravite: Any,
+) -> Dict[str, Any]:
+
+    final = {
+        "utile": utile,
+        "categorie": categorie,
+        "sentiment": sentiment,
+        "type_probleme": type_probleme,
+        "score_gravite": score_gravite,
+        "status": "success",
+    }
+
+    has_problem_or_question = (
+        categorie in ["probleme", "question"] or
+        (type_probleme and type_probleme != "autre") or
+        (isinstance(score_gravite, (int, float)) and score_gravite <= -3)
+    )
+    if has_problem_or_question and final["utile"] is not True:
+        final["utile"] = True
+
+    if final["utile"] is False:
+        if isinstance(score_gravite, (int, float)):
+            if score_gravite < -1:
+                final["score_gravite"] = -1
+            elif score_gravite > 1:
+                final["score_gravite"] = 1
+        elif score_gravite is None:
+            final["score_gravite"] = 0
+
+    negative_sentiments = {"colere", "frustration", "deception", "inquietude"}
+    positive_sentiments = {"satisfaction", "enthousiasme"}
+    neutral_sentiments = {"neutre"}
+
+    if final.get("sentiment") in negative_sentiments:
+        if isinstance(final.get("score_gravite"), (int, float)) and final["score_gravite"] > -4:
+            final["score_gravite"] = max(-10, -4)
+        elif final.get("score_gravite") is None:
+            final["score_gravite"] = -5
+    elif final.get("sentiment") in positive_sentiments:
+        if isinstance(final.get("score_gravite"), (int, float)) and final["score_gravite"] < 4:
+            final["score_gravite"] = min(10, 4)
+        elif final.get("score_gravite") is None:
+            final["score_gravite"] = 5
+    elif final.get("sentiment") in neutral_sentiments and final.get("score_gravite") is None:
+        final["score_gravite"] = 0
+
+    if isinstance(final["score_gravite"], (int, float)):
+        final["score_gravite"] = max(-10, min(10, int(final["score_gravite"])))
+
+    if final.get("utile") is False:
+        sg = final.get("score_gravite")
+        final["score_gravite"] = 0 if sg is None else max(-1, min(1, int(sg)))
+
+    valid_sentiments = [
+        "colere", "frustration", "deception", "inquietude",
+        "neutre", "satisfaction", "enthousiasme"
+    ]
+    if final["sentiment"] == "outrage_critique":
+        final["sentiment"] = "colere"
+    elif final["sentiment"] and final["sentiment"] not in valid_sentiments:
+
+        pass
+
+    valid_categories = ["probleme", "question", "retour_client"]
+    if final["categorie"] and final["categorie"] not in valid_categories:
+
+        pass
+
+    valid_types = ["panne", "facturation", "abonnement", "resiliation", "information", "autre"]
+    if final["type_probleme"] and final["type_probleme"] not in valid_types:
+
+        pass
+
+    return final
+
 def extract_json_value(response: str, key: str = None, aliases: Optional[list[str]] = None) -> Any:
-    """Extract a key (with optional aliases) from a JSON-like response."""
     if response is None:
         return None
     cleaned_response = response.strip()
@@ -124,7 +193,6 @@ def extract_json_value(response: str, key: str = None, aliases: Optional[list[st
     if aliases:
         keys_to_try.extend([alias for alias in aliases if alias and alias not in keys_to_try])
 
-    # 1. Try pure JSON parsing (fastest)
     try:
         data = json.loads(cleaned_response)
         if keys_to_try and isinstance(data, dict):
@@ -135,7 +203,6 @@ def extract_json_value(response: str, key: str = None, aliases: Optional[list[st
     except json.JSONDecodeError:
         pass
 
-    # 2. Try finding JSON blob inside text ```json ... ``` or { ... }
     try:
         match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
         if match:
@@ -149,7 +216,6 @@ def extract_json_value(response: str, key: str = None, aliases: Optional[list[st
     except:
         pass
 
-    # 3. Regex fallback for each candidate key
     for candidate in keys_to_try:
         pattern = f'"{candidate}"\\s*:\\s*("([^"]*)"|(\\d+|true|false|null))'
         match = re.search(pattern, cleaned_response, re.IGNORECASE)
@@ -167,14 +233,13 @@ def extract_json_value(response: str, key: str = None, aliases: Optional[list[st
     return None
 
 class State(TypedDict, total=False):
-    full_text: str
+    clean_text: str
     a1_result: str
     a2_result: str
     a3_result: str
     a4_result: str
     a5_result: str
     final_json: Dict[str, Any]
-
 
 def build_pipeline(
     active_prompts: Dict[str, Dict[str, Any]],
@@ -184,7 +249,8 @@ def build_pipeline(
 ):
     def run_agent(state: State, agent_key: str, result_key: str):
         prompt_cfg = active_prompts[agent_key]
-        prompt = prompt_cfg["prompt_template"].replace("{{full_text}}", state["full_text"])
+        clean_text = state.get("clean_text", "")
+        prompt = prompt_cfg["prompt_template"].replace("{{full_text}}", clean_text).replace("{{clean_text}}", clean_text)
 
         with start_span(
             name=f"{agent_key}_agent",
@@ -207,76 +273,40 @@ def build_pipeline(
     def node_a5(state): return run_agent(state, "A5_gravite", "a5_result")
 
     def node_a6_checker(state):
-        # Parse agent results to extract actual values
+
         a1_raw = state.get("a1_result", "")
         a2_raw = state.get("a2_result", "")
         a3_raw = state.get("a3_result", "")
         a4_raw = state.get("a4_result", "")
         a5_raw = state.get("a5_result", "")
-        
+
         a1_parsed = extract_json_value(a1_raw, "utile", aliases=["useful"])
         a2_parsed = extract_json_value(a2_raw, "categorie")
         a3_parsed = extract_json_value(a3_raw, "sentiment")
         a4_parsed = extract_json_value(a4_raw, "type_probleme")
         a5_parsed = extract_json_value(a5_raw, "score_gravite")
-        
-        # Build structured results for the checker
-        parsed_results = {
-            "A1": {"utile": a1_parsed, "raw": a1_raw},
-            "A2": {"categorie": a2_parsed, "raw": a2_raw},
-            "A3": {"sentiment": a3_parsed, "raw": a3_raw},
-            "A4": {"type_probleme": a4_parsed, "raw": a4_raw},
-            "A5": {"score_gravite": a5_parsed, "raw": a5_raw},
-        }
-        results_str = json.dumps(parsed_results, indent=2, ensure_ascii=False)
-        
-        # Get the original tweet text
-        full_text = state.get("full_text", "")
-
-        prompt_cfg = active_prompts["A6_checker"]
-        prompt = prompt_cfg["prompt_template"].replace("{{agent_results}}", results_str)
-        prompt = prompt.replace("{{full_text}}", full_text)
 
         with start_span(
             name="A6_checker",
-            attributes={"agent_key": "A6_checker", "model_name": model_name},
+            attributes={"agent_key": "A6_checker", "model_name": "algorithmic"},
         ) as span:
-            span.set_inputs({"prompt": prompt, "parsed_results": parsed_results})
-            response = call_native_generate(ollama_host, model_name, prompt, options=ollama_options)
-            span.set_outputs({"checker_response": response})
+            span.set_inputs({
+                "a1_utile": a1_parsed,
+                "a2_categorie": a2_parsed,
+                "a3_sentiment": a3_parsed,
+                "a4_type_probleme": a4_parsed,
+                "a5_score_gravite": a5_parsed,
+            })
 
-        final_json = extract_json_value(response)
-        
-        # If checker failed to return valid JSON, fall back to parsed agent results
-        if not isinstance(final_json, dict):
-            final_json = {
-                "utile": a1_parsed,
-                "categorie": a2_parsed,
-                "sentiment": a3_parsed,
-                "type_probleme": a4_parsed,
-                "score_gravite": a5_parsed,
-                "status": "error",
-                "raw_response": response,
-            }
-        else:
-            # Handle alias first
-            if "utile" not in final_json and "useful" in final_json:
-                final_json["utile"] = final_json.get("useful")
-            
-            # Ensure all required keys are present, using agent results as fallback only if key is missing
-            # (If checker explicitly sets null, we keep it)
-            if "utile" not in final_json:
-                final_json["utile"] = a1_parsed
-            if "categorie" not in final_json:
-                final_json["categorie"] = a2_parsed
-            if "sentiment" not in final_json:
-                final_json["sentiment"] = a3_parsed
-            if "type_probleme" not in final_json:
-                final_json["type_probleme"] = a4_parsed
-            if "score_gravite" not in final_json:
-                final_json["score_gravite"] = a5_parsed
-            if "status" not in final_json:
-                final_json["status"] = "success"
+            final_json = algorithmic_checker(
+                utile=a1_parsed,
+                categorie=a2_parsed,
+                sentiment=a3_parsed,
+                type_probleme=a4_parsed,
+                score_gravite=a5_parsed,
+            )
+
+            span.set_outputs({"final_json": final_json})
 
         return {"final_json": final_json}
 
@@ -306,7 +336,6 @@ def append_jsonl(path: str, payload: Dict[str, Any]) -> None:
     with open(path, "a", encoding="utf-8") as fp:
         fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-
 def run_pipeline(
     config: PipelineConfig,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -335,14 +364,14 @@ def run_pipeline(
             f"Input CSV file not found: {config.input_csv}. "
             "Run clean_free_tweets.py first or point PipelineConfig.input_csv to an existing file."
         )
-    
+
     with open(config.input_csv, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for i, r in enumerate(reader):
             if i >= config.max_rows:
                 break
             rows.append(r)
-    
+
     if not rows:
         raise ValueError(f"No rows found in {config.input_csv} or file is empty")
 
@@ -392,7 +421,7 @@ def run_pipeline(
                 print("Stop signal received. Ending run early.")
                 stopped_early = True
                 break
-            full_text = row.get("clean_text", "") or row.get("full_text", "") or str(row)
+            clean_text = row.get("clean_text", "") or row.get("full_text", "") or str(row)
             row_start = time.time()
 
             latest_gpu = watcher.latest() if watcher else None
@@ -402,14 +431,14 @@ def run_pipeline(
                 latest_gpu = watcher.latest() if watcher else latest_gpu
 
             print(f"\n[{i}/{len(rows)}] Tweet ID={row.get('id')}")
-            print(f"  Text: {full_text[:500]}{'...' if len(full_text) > 500 else ''}")
+            print(f"  Clean Text: {clean_text[:500]}{'...' if len(clean_text) > 500 else ''}")
 
-            inputs = {"full_text": full_text}
+            inputs = {"clean_text": clean_text}
             with start_span(
                 name="tweet_pipeline",
                 attributes={"tweet_id": row.get("id"), "row_index": i},
             ) as pipeline_span:
-                pipeline_span.set_inputs({"full_text": full_text})
+                pipeline_span.set_inputs({"clean_text": clean_text})
                 output = app.invoke(inputs)
                 final = output.get("final_json", {})
                 pipeline_span.set_outputs(
@@ -448,9 +477,9 @@ def run_pipeline(
                 "row_index": i,
                 "tweet_id": row.get("id"),
                 "screen_name": row.get("screen_name"),
-                "full_text": full_text,
+                "full_text": row.get("full_text", ""),
                 "date_iso": row.get("date_iso"),
-                "clean_text": row.get("clean_text"),
+                "clean_text": clean_text,
                 "favorite_count": row.get("favorite_count"),
                 "reply_count": row.get("reply_count"),
                 "elapsed_sec": round(elapsed, 2),
@@ -521,11 +550,9 @@ def run_pipeline(
         "stopped_early": locals().get("stopped_early", False),
     }
 
-
 def main():
     config = PipelineConfig()
     run_pipeline(config)
-
 
 if __name__ == "__main__":
     main()

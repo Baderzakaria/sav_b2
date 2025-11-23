@@ -1,9 +1,4 @@
-#!/usr/bin/env python3
-"""
-Register prompts from prompts/freemind_prompts.json into MLflow Prompt Registry
-when the GenAI Prompt Registry APIs are available. Falls back to logging the
-prompt template to MLflow artifacts if the registry is not present (older MLflow).
-"""
+
 
 from __future__ import annotations
 
@@ -14,7 +9,6 @@ from pathlib import Path
 import mlflow
 
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
-
 
 def main() -> int:
     if not PROMPT_FILE.exists():
@@ -32,13 +26,12 @@ def main() -> int:
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment("freemind_prompt_registry")
 
-    # Try MLflow GenAI prompt registry; fall back to artifact logging
     try:
-        from mlflow.genai import register_prompt, load_prompt  # type: ignore[attr-defined]
+        from mlflow.genai import register_prompt, load_prompt
         HAS_PROMPT_REGISTRY = True
     except Exception:
-        register_prompt = None  # type: ignore
-        load_prompt = None  # type: ignore
+        register_prompt = None
+        load_prompt = None
         HAS_PROMPT_REGISTRY = False
 
     with mlflow.start_run(run_name="register_prompts"):
@@ -50,14 +43,13 @@ def main() -> int:
 
             if HAS_PROMPT_REGISTRY and register_prompt is not None:
                 try:
-                    # Check if prompt already exists
+
                     existing_version = None
                     try:
                         existing = load_prompt(f"prompts:/{name}@latest")
                         existing_template = existing.template if hasattr(existing, 'template') else str(existing)
                         existing_version = getattr(existing, 'version', None)
-                        
-                        # Compare templates (normalize whitespace)
+
                         if existing_template.strip() == template.strip():
                             print(f"Prompt '{name}' unchanged (v{existing_version}), skipping registration")
                             mlflow.log_param(f"prompt_{name}_version", f"v{existing_version} (reused)")
@@ -65,10 +57,9 @@ def main() -> int:
                         else:
                             print(f"Prompt '{name}' template changed, creating new version...")
                     except Exception:
-                        # Prompt doesn't exist yet, will create first version
+
                         print(f"Prompt '{name}' not found, creating initial version...")
-                    
-                    # Register new version (only if template changed or doesn't exist)
+
                     pr = register_prompt(
                         name=name,
                         template=template,
@@ -80,18 +71,16 @@ def main() -> int:
                     if existing_version:
                         mlflow.log_param(f"prompt_{name}_previous_version", f"v{existing_version}")
                 except Exception as e:
-                    # Fall back to logging the prompt as an artifact
+
                     print(f"Failed to register '{name}' ({e}); logging as artifact.")
                     mlflow.log_dict({"name": name, "template": template}, artifact_file=f"prompts/{name}.json")
             else:
-                # Older MLflow: just log the template for provenance
+
                 print(f"Prompt Registry not available, logging '{name}' as artifact")
                 mlflow.log_dict({"name": name, "template": template}, artifact_file=f"prompts/{name}.json")
 
     return 0
 
-
 if __name__ == "__main__":
     raise SystemExit(main())
-
 

@@ -8,9 +8,8 @@ from collections import deque
 
 try:
     import pynvml
-except ImportError:  # pragma: no cover - handled at runtime
+except ImportError:
     pynvml = None
-
 
 @dataclass
 class GPUMetric:
@@ -23,7 +22,6 @@ class GPUMetric:
     @property
     def mem_free_mb(self) -> float:
         return max(self.mem_total_mb - self.mem_used_mb, 0)
-
 
 @dataclass
 class GPUWatcher:
@@ -119,13 +117,9 @@ class GPUWatcher:
                 "temperature": m.temperature,
             }
 
-
 def capture_nvidia_smi() -> str:
-    """Return the current `nvidia-smi` output as text."""
     try:
         return subprocess.check_output(["nvidia-smi"], text=True, timeout=5)
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         return f"Failed to run nvidia-smi: {exc}"
-
-
 

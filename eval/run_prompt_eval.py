@@ -1,11 +1,4 @@
-#!/usr/bin/env python3
-"""
-Offline prompt evaluation that works with current environment:
-- Attempts to register the A1 prompt in the MLflow Prompt Registry (if available)
-- Generates predictions using the A1 prompt against the first N tweets
-- Computes simple metrics (heuristic ground truth vs model outputs)
-- Logs everything to a single MLflow run with artifacts
-"""
+
 
 from __future__ import annotations
 
@@ -27,7 +20,6 @@ DEFAULT_INPUT = Path("data/free tweet export.csv")
 RESULTS_DIR = Path("data/results")
 ISSUE_REGEX = re.compile(r"(panne|proble|incident|coupure|rupture|lent|bug|erreur|service)", re.IGNORECASE)
 
-
 def load_prompt_template(agent_key: str) -> Optional[str]:
     try:
         cfg = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
@@ -39,12 +31,11 @@ def load_prompt_template(agent_key: str) -> Optional[str]:
     except Exception:
         return None
 
-
 def register_prompt_if_possible(name: str, template: str) -> Optional[str]:
     try:
-        from mlflow.genai import register_prompt  # type: ignore[attr-defined]
+        from mlflow.genai import register_prompt
     except Exception:
-        register_prompt = None  # type: ignore
+        register_prompt = None
     if register_prompt is None:
         return None
     try:
@@ -52,7 +43,6 @@ def register_prompt_if_possible(name: str, template: str) -> Optional[str]:
         return f"prompts:/{getattr(pr, 'name', name)}@{getattr(pr, 'version', 'latest')}"
     except Exception:
         return None
-
 
 def extract_value(raw: str) -> str:
     s = (raw or "").strip()
@@ -73,10 +63,8 @@ def extract_value(raw: str) -> str:
     m = re.search(r"(problem|not_problem|unclear|true|false)", s, re.IGNORECASE)
     return (m.group(1).lower() if m else s[:64])
 
-
 def is_issue(text: str) -> bool:
     return bool(ISSUE_REGEX.search(text or ""))
-
 
 def score(pred: str, text: str) -> Tuple[int, int, int, int]:
     y = is_issue(text)
@@ -86,7 +74,6 @@ def score(pred: str, text: str) -> Tuple[int, int, int, int]:
     fp = int(yhat and (not y))
     fn = int((not yhat) and y)
     return tp, tn, fp, fn
-
 
 def run_eval(
     input_csv: Path,
@@ -99,7 +86,6 @@ def run_eval(
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment)
 
-    # Data
     rows: List[Dict[str, Any]] = []
     with input_csv.open("r", encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
@@ -112,11 +98,9 @@ def run_eval(
         print("No rows to evaluate.")
         return
 
-    # Prompt
     template = load_prompt_template(agent_key) or "Decide issue: Return JSON {\"status\": \"problem|not_problem|unclear\"}\nTweet:\n{{full_text}}"
     registry_uri = register_prompt_if_possible(agent_key, template)
 
-    # Run
     run_name = f"prompt_eval_{agent_key}_{int(time.time())}"
     with mlflow.start_run(run_name=run_name):
         mlflow.log_param("input_csv", str(input_csv))
@@ -175,7 +159,6 @@ def run_eval(
         mlflow.log_artifact(str(out_csv), artifact_path="eval")
         print(f"Saved eval CSV: {out_csv}")
 
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Offline prompt evaluation (env-compatible).")
     p.add_argument("--input-csv", type=Path, default=DEFAULT_INPUT)
@@ -185,7 +168,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tracking-uri", type=str, default="file:./mlruns")
     p.add_argument("--experiment", type=str, default="freemind_prompt_eval")
     return p.parse_args()
-
 
 if __name__ == "__main__":
     args = parse_args()
@@ -197,5 +179,4 @@ if __name__ == "__main__":
         tracking_uri=args.tracking_uri,
         experiment=args.experiment,
     )
-
 

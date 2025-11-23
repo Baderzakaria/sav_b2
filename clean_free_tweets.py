@@ -1,16 +1,4 @@
 
-"""Tweet cleaning and enrichment pipeline.
-
-Usage:
-    python clean_free_tweets.py \
-        --input "/home/bader/Desktop/sav_b2/data/free tweet export.csv"
-
-This script removes noisy tweets (retweets, duplicates, off-topic),
-normalizes text, and exports a clean dataset ready for the orchestrator
-(which handles detection, sentiment, and categorisation). Outputs are
-saved as timestamped and "latest" CSV/JSON artifacts under `data/cleaned`,
-with matching metadata stored in `data/results`.
-"""
 
 from __future__ import annotations
 
@@ -25,7 +13,6 @@ from typing import Dict
 
 import pandas as pd
 from pandas.api import types as pd_types
-
 
 RE_EMOJI = re.compile(
     "["
@@ -71,7 +58,6 @@ AUTO_REPLY_SNIPPETS = [
 
 MASS_PROMO_THRESHOLD = 3
 
-
 @dataclass
 class PipelineArtifacts:
     csv_latest: Path
@@ -80,7 +66,6 @@ class PipelineArtifacts:
     json_timestamped: Path
     metadata_latest: Path
     metadata_timestamped: Path
-
 
 def normalize_text(text: str) -> str:
     if not isinstance(text, str):
@@ -94,24 +79,20 @@ def normalize_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text, flags=re.UNICODE).strip().lower()
     return text
 
-
 def remove_retweets(df: pd.DataFrame) -> pd.DataFrame:
     mask = ~df["full_text"].astype(str).str.match(RT_PREFIX)
     return df[mask].copy()
-
 
 def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"])
     return df.drop_duplicates(subset=["full_text"]).copy()
 
-
 def remove_official_accounts(df: pd.DataFrame) -> pd.DataFrame:
     if "screen_name" not in df.columns:
         return df
     mask = ~df["screen_name"].isin(OFFICIAL_ACCOUNTS)
     return df[mask].copy()
-
 
 def filter_off_topic(df: pd.DataFrame) -> pd.DataFrame:
     def is_ad_or_auto_reply(text: str) -> bool:
@@ -128,7 +109,6 @@ def filter_off_topic(df: pd.DataFrame) -> pd.DataFrame:
     filtered = df[mask].copy()
     return filtered
 
-
 def remove_mass_promotions(df: pd.DataFrame) -> pd.DataFrame:
     if "clean_text" not in df.columns:
         return df
@@ -142,7 +122,6 @@ def remove_mass_promotions(df: pd.DataFrame) -> pd.DataFrame:
     mask = ~df["clean_text"].isin(promo_texts)
     return df[mask].copy()
 
-
 def load_dataset(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix in {".xls", ".xlsx"}:
@@ -152,7 +131,6 @@ def load_dataset(path: Path) -> pd.DataFrame:
     if "full_text" not in df.columns:
         raise ValueError("Expected column 'full_text' in dataset.")
     return df
-
 
 def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -182,7 +160,6 @@ def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     available_cols = [col for col in useful_cols if col in df.columns]
     return df[available_cols].reset_index(drop=True)
 
-
 def prepare_artifacts(base_name: str, output_dir: Path, results_dir: Path, timestamp: str) -> PipelineArtifacts:
     csv_latest = output_dir / f"{base_name}-latest.csv"
     csv_timestamped = output_dir / f"{base_name}-{timestamp}.csv"
@@ -199,7 +176,6 @@ def prepare_artifacts(base_name: str, output_dir: Path, results_dir: Path, times
         metadata_timestamped=metadata_timestamped,
     )
 
-
 def serialize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     serializable = df.copy()
     for column in serializable.columns:
@@ -207,7 +183,6 @@ def serialize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if pd_types.is_datetime64_any_dtype(series):
             serializable[column] = series.dt.strftime("%Y-%m-%dT%H:%M:%S")
     return serializable.where(pd.notnull(serializable), None)
-
 
 def write_dataframe_outputs(df: pd.DataFrame, artifacts: PipelineArtifacts) -> None:
     df.to_csv(artifacts.csv_latest, index=False)
@@ -218,7 +193,6 @@ def write_dataframe_outputs(df: pd.DataFrame, artifacts: PipelineArtifacts) -> N
     for path in (artifacts.json_latest, artifacts.json_timestamped):
         with path.open("w", encoding="utf-8") as handle:
             json.dump(records, handle, ensure_ascii=False, indent=2)
-
 
 def build_metadata(
     df_raw: pd.DataFrame,
@@ -249,17 +223,14 @@ def build_metadata(
         "stats": stats,
     }
 
-
 def write_metadata(metadata: Dict[str, object], artifacts: PipelineArtifacts) -> None:
     for path in (artifacts.metadata_latest, artifacts.metadata_timestamped):
         with path.open("w", encoding="utf-8") as handle:
             json.dump(metadata, handle, ensure_ascii=False, indent=2)
 
-
 def sanitize_base_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower()
     return cleaned or "tweets_clean"
-
 
 def parse_args() -> argparse.Namespace:
     default_input = Path(__file__).resolve().parent / "data" / "free tweet export.csv"
@@ -279,7 +250,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--name", type=str, default=None, help="Nom de base des fichiers de sortie.")
     return parser.parse_args()
-
 
 def main() -> None:
     args = parse_args()
@@ -313,7 +283,6 @@ def main() -> None:
     print(f"   JSON latest : {artifacts.json_latest}")
     print(f"   JSON horodaté : {artifacts.json_timestamped}")
     print(f"   Résumé : {artifacts.metadata_timestamped}")
-
 
 if __name__ == "__main__":
     main()
