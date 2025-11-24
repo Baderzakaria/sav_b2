@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sse-starlette
+python-multipart
+# Dependencies from root requirements.txt needed for orchestrator
+requests
+langgraph
+pandas
+mlflow>=2.17.2
+vaderSentiment
+plotly
+pynvml
+psutil
+dvc

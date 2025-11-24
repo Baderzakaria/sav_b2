@@ -194,4 +194,136 @@ def render_mermaid(diagram: str) -> str:
     </div>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>mermaid.initialize({{startOnLoad: true}});</script>
+    """
+
+
+def pick_results_path() -> Path:
+    st.sidebar.header("Data source")
+    files = list_result_files()
+    if not files:
+        st.sidebar.warning("No exported CSV files found in data/results.")
+        return DEFAULT_RESULTS_PATH
+
+    labels = [label for label, _ in files]
+    paths = {label: path for label, path in files}
+    default_label = labels[0]
+    if DEFAULT_RESULTS_PATH.exists():
+        for label, path in files:
+            if path == DEFAULT_RESULTS_PATH:
+                default_label = label
+                break
+
+    selected_label = st.sidebar.selectbox("Results file", labels, index=labels.index(default_label))
+    return paths[selected_label]
+
+
+def configure_app() -> AppConfig:
+    selected_path = pick_results_path()
+    st.sidebar.header("Tracking & Logging")
+    enable_mlflow = st.sidebar.toggle("Enable MLflow logging", value=True)
+    tracking_uri = st.sidebar.text_input("MLflow tracking URI", value=DEFAULT_TRACKING_URI, disabled=not enable_mlflow)
+    experiment_name = st.sidebar.text_input("Experiment name", value=DEFAULT_EXPERIMENT, disabled=not enable_mlflow)
+    return AppConfig(
+        results_path=selected_path,
+        tracking_uri=tracking_uri,
+        experiment_name=experiment_name,
+        enable_mlflow=enable_mlflow,
+    )
+
+
+def render_filters(df: pd.DataFrame) -> tuple[List[str], str]:
+    st.sidebar.header("Filters")
+    authors = sorted(df["screen_name"].dropna().unique().tolist()) if "screen_name" in df.columns else []
+    selected_authors = st.sidebar.multiselect("Authors", authors, max_selections=10)
+    search_query = st.sidebar.text_input("Search text", placeholder="keyword, hashtag, user…")
+    return selected_authors, search_query
+
+
+def render_summary_metrics(df: pd.DataFrame) -> None:
+    total_rows = len(df)
+    utile_col = None
+    for candidate in ("Final_utile", "A1_utile"):
+        if candidate in df.columns:
+            utile_col = candidate
+            break
+
+    cols = st.columns(3)
+    cols[0].metric("Rows loaded", f"{total_rows:,}")
+    cols[1].metric("Distinct authors", df["screen_name"].nunique() if "screen_name" in df.columns else 0)
+    if utile_col:
+        utile_rate = df[utile_col].mean(skipna=True)
+        value = f"{utile_rate * 100:0.1f}%" if pd.notna(utile_rate) else "N/A"
+        cols[2].metric(f"{utile_col} rate", value)
+    else:
+        cols[2].metric("Useful rate", "N/A")
+
+
+def render_results_table(df: pd.DataFrame, config: AppConfig) -> None:
+    if df.empty:
+        st.info("No rows match the current filters.")
+        return
+
+    st.subheader("Latest rows")
+    preview = df.head(200)
+    st.dataframe(preview, width="stretch")
+
+    if "id" not in preview.columns:
+        return
+
+    selected_id = st.selectbox(
+        "Inspect row",
+        preview["id"].astype(str).tolist(),
+        format_func=lambda value: f"ID {value}",
+    )
+    selected_row = preview[preview["id"].astype(str) == selected_id].iloc[0]
+
+    with st.expander("Selected row details", expanded=True):
+        st.json(selected_row.to_dict())
+
+        if config.enable_mlflow:
+            if st.button("Log selection to MLflow"):
+                try:
+                    run_id = log_selection_to_mlflow(selected_row, config)
+                    st.success(f"Logged to MLflow run {run_id}")
+                except Exception as exc:
+                    st.error(f"Failed to log to MLflow: {exc}")
+        else:
+            st.caption("Enable MLflow in the sidebar to log this selection.")
+
+
+def render_pipeline_section() -> None:
+    st.subheader("Pipeline overview")
+    diagram = build_pipeline_mermaid()
+    html = render_mermaid(diagram)
+    st.components.v1.html(html, height=420, scrolling=False)
+
+
+def main() -> None:
+    st.set_page_config(page_title="Freemind Inspector", layout="wide")
+    st.title("Freemind Streamlit Inspector")
+    st.caption("Visualize exported rows, inspect metadata, and send interesting samples to MLflow.")
+
+    config = configure_app()
+
+    try:
+        df = load_results(str(config.results_path))
+    except FileNotFoundError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    selected_authors, search_query = render_filters(df)
+    filtered_df = apply_filters(df, selected_authors, search_query)
+
+    st.markdown("### Overview")
+    render_summary_metrics(filtered_df)
+
+    st.markdown("### Results")
+    render_results_table(filtered_df, config)
+
+    st.markdown("### Pipeline")
+    render_pipeline_section()
+
+
+if __name__ == "__main__":
+    main()
 

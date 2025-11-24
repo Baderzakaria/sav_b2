@@ -349,7 +349,7 @@ def render_gpu_chart(entries: List[Dict]) -> None:
 
     st.plotly_chart(
         fig,
-        use_container_width=True,
+        width="stretch",
         config={
             "displayModeBar": True,
             "displaylogo": False,
@@ -371,7 +371,7 @@ def render_history_chart(history_df: pd.DataFrame) -> None:
         labels={"rows_processed": "Rows", "avg_sec_per_row": "Avg sec/row"},
         title="Recent Pipeline Runs",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 def render_prompt_editor():
     st.subheader("Prompt Management")
@@ -400,11 +400,11 @@ def render_dvc_section():
     if not dvc_ready:
         st.warning("DVC repository not initialized. Run `dvc init` in the project root to enable these commands.")
     cols = st.columns(3)
-    if cols[0].button("dvc add", use_container_width=True, disabled=not dvc_ready):
+    if cols[0].button("dvc add", width="stretch", disabled=not dvc_ready):
         run_dvc_command(["dvc", "add", st.session_state["dvc_target_path"]])
-    if cols[1].button("dvc commit", use_container_width=True, disabled=not dvc_ready):
+    if cols[1].button("dvc commit", width="stretch", disabled=not dvc_ready):
         run_dvc_command(["dvc", "commit", st.session_state["dvc_target_path"]])
-    if cols[2].button("dvc push", use_container_width=True, disabled=not dvc_ready):
+    if cols[2].button("dvc push", width="stretch", disabled=not dvc_ready):
         run_dvc_command(["dvc", "push", st.session_state["dvc_target_path"]])
     if st.session_state.dvc_logs:
         st.code(st.session_state.dvc_logs, language="bash")
@@ -553,7 +553,7 @@ def render_live_results():
 
             if len(live_entries) > 0:
                 live_df = pd.DataFrame(live_entries)
-                st.dataframe(live_df.tail(50), use_container_width=True, height=400)
+                st.dataframe(live_df.tail(50), width="stretch", height=400)
 
                 if any("gpu_util" in e for e in live_entries):
                     render_gpu_chart(live_entries)
@@ -570,7 +570,7 @@ def render_run_history():
     history_df = load_run_history()
     render_history_chart(history_df)
     if not history_df.empty:
-        st.dataframe(history_df.head(10), use_container_width=True)
+        st.dataframe(history_df.head(10), width="stretch")
 
 def latest_gpu_entry() -> Optional[Dict]:
 
@@ -701,7 +701,7 @@ def render_smi_history():
 
     st.plotly_chart(
         fig,
-        use_container_width=True,
+        width="stretch",
         config={
             "displayModeBar": True,
             "displaylogo": False,
@@ -730,7 +730,7 @@ def render_run_controls():
     model_col1, model_col2 = st.columns([4, 1])
     with model_col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh", use_container_width=True, help="Refresh model list from 'ollama ls'"):
+        if st.button("🔄 Refresh", width="stretch", help="Refresh model list from 'ollama ls'"):
 
             if "cached_ollama_models" in st.session_state:
                 del st.session_state.cached_ollama_models
@@ -802,11 +802,11 @@ def render_run_controls():
         launch_pipeline(config)
         st.success("Run started.")
 
-    if st.button("Launch Default (CLI) Run", disabled=running, use_container_width=True):
+    if st.button("Launch Default (CLI) Run", disabled=running, width="stretch"):
         launch_pipeline(PipelineConfig())
         st.success("Default run started (same as `python orchestrator.py`).")
 
-    if st.button("Stop Run", disabled=not running, use_container_width=True):
+    if st.button("Stop Run", disabled=not running, width="stretch"):
         stop_pipeline()
         st.warning("Stop signal sent.")
 
@@ -981,7 +981,7 @@ def render_gpu_panel():
         with refresh_col1:
             st.caption("Raw output from nvidia-smi command")
         with refresh_col2:
-            if st.button("🔄 Refresh", use_container_width=True, type="primary"):
+            if st.button("🔄 Refresh", width="stretch", type="primary"):
                 snapshot = capture_nvidia_smi()
                 record_smi_snapshot(snapshot)
                 st.rerun()
@@ -1049,7 +1049,7 @@ def render_gpu_panel():
 
                 st.plotly_chart(
                     fig,
-                    use_container_width=True,
+                    width="stretch",
                     config={
                         "displayModeBar": True,
                         "displaylogo": False,
@@ -1065,7 +1065,7 @@ def render_admin_panel():
     history_df = load_run_history(limit=5)
     if not history_df.empty:
         st.caption("Recent runs")
-        st.dataframe(history_df[["run_id", "rows_processed", "avg_sec_per_row"]], use_container_width=True)
+        st.dataframe(history_df[["run_id", "rows_processed", "avg_sec_per_row"]], width="stretch")
     else:
         st.info("No run metadata yet.")
 
@@ -1094,10 +1094,10 @@ def main():
             with col1:
                 st.info("🔄 Pipeline is running. Auto-refreshing every 2 seconds...")
             with col2:
-                if st.button("🔄 Refresh", help="Manual refresh", use_container_width=True):
+                if st.button("🔄 Refresh", help="Manual refresh", width="stretch"):
                     st.rerun()
             with col3:
-                if st.button("⏸️ Pause", help="Pause auto-refresh", use_container_width=True):
+                if st.button("⏸️ Pause", help="Pause auto-refresh", width="stretch"):
                     st.session_state.auto_refresh_paused = not st.session_state.get("auto_refresh_paused", False)
                     st.rerun()
 

@@ -48,6 +48,7 @@ class PipelineConfig:
     adaptive_mem_floor_timeout_sec: float = 8.0
     adaptive_mem_floor_slack_mb: int = 1024
     adaptive_mem_floor_min_mb: int = 1024
+    save_to_disk: bool = True
 
 def ensure_results_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
@@ -341,7 +342,8 @@ def run_pipeline(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     stop_signal: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-    ensure_results_dir(config.results_dir)
+    if config.save_to_disk:
+        ensure_results_dir(config.results_dir)
     live_dir = config.live_log_dir or config.results_dir
 
     timestamp = int(time.time())
@@ -497,14 +499,14 @@ def run_pipeline(
             }
 
             log_entries.append(entry)
-            if config.enable_live_log:
+            if config.enable_live_log and config.save_to_disk:
                 append_jsonl(live_log_path, entry)
             if progress_callback:
                 progress_callback(entry)
 
     total_duration = time.time() - start_pipeline
 
-    if log_entries:
+    if log_entries and config.save_to_disk:
         keys = log_entries[0].keys()
         for output_path in (log_csv_path, log_csv_latest_path):
             with open(output_path, "w", encoding="utf-8", newline="") as f:
@@ -532,6 +534,8 @@ def run_pipeline(
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
         print(f"Metadata saved to {metadata_json_path} and {metadata_json_latest_path}")
+    elif not config.save_to_disk:
+        print("Save to disk disabled. No files written.")
     else:
         print("No rows processed; nothing to log.")
 

@@ -1,0 +1,73 @@
+version: '3.9'
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:2.17.2
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow
+      - ./mlruns:/mlflow/artifacts
+    ports:
+      - "5000:5000"
+
+  mlflow-proxy:
+    image: nginx:alpine
+    depends_on:
+      - mlflow
+    volumes:
+      - ./infra/mlflow-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "5050:80"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ./data:/app/data
+      - ./prompts:/app/prompts
+      - ./mlruns:/app/mlruns
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["streamlit", "run", "apps/streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ./data:/app/data
+      - ./prompts:/app/prompts
+      - ./mlruns:/app/mlruns
+    ports:
+      - "8501:8501"
+    depends_on:
+      - mlflow
+
+  frontend:
+    build:
+      context: frontend
+      args:
+        VITE_BACKEND_URL: http://localhost:8000
+        VITE_MLFLOW_URL: http://localhost:5050
+        VITE_STREAMLIT_URL: http://localhost:8501
+        VITE_INTERFACE_URL: http://localhost:8501
+    ports:
+      - "4173:80"
+    depends_on:
+      - backend
+      - mlflow-proxy
+      - streamlit
+
+volumes:
+  mlflow_data:

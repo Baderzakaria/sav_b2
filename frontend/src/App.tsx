@@ -8,7 +8,7 @@ import { StatsPage } from './pages/StatsPage';
 import { ChatWidget } from './components/chat/ChatWidget';
 import { DataProvider } from './context/DataContext';
 import { EXTERNAL_ROUTES } from './config/links';
-import { ExternalRedirectPage } from './components/ExternalRedirectPage';
+import { ExternalEmbedPage, ExternalRedirectPage } from './components/ExternalRedirectPage';
 
 function App() {
   return (
@@ -25,11 +25,17 @@ function App() {
               <Route path="/urgent" element={<UrgentPage />} />
               <Route path="/stats" element={<StatsPage />} />
               <Route path="/import" element={<ImportPage />} />
-              {EXTERNAL_ROUTES.map(({ path, label }) => (
+              {EXTERNAL_ROUTES.map(({ path, label, url, mode = 'embed' }) => (
                 <Route
                   key={path}
                   path={path}
-                  element={<ExternalRedirectPage sourceLabel={label} />}
+                  element={
+                    mode === 'redirect' ? (
+                      <ExternalRedirectPage sourceLabel={label} targetUrl={url} />
+                    ) : (
+                      <ExternalEmbedPage sourceLabel={label} targetUrl={url} />
+                    )
+                  }
                 />
               ))}
               <Route path="*" element={<div className="p-10">Page en construction...</div>} />
