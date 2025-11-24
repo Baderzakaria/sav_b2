@@ -7,37 +7,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, TypedDict, Any, Dict, List, Optional
 
-from freemind_env import load_environment
-
-load_environment()
-
 import mlflow
 from langgraph.graph import StateGraph, START, END
 from mlflow.tracing.fluent import start_span
 
 from monitoring.gpu_watchdog import GPUWatcher, capture_nvidia_smi
-from utils_runtime import call_native_generate, call_openrouter_chat
+from utils_runtime import call_native_generate
 
 INPUT_CSV = "data/cleaned/free_tweet_export-latest.csv"
 RESULTS_DIR = "data/results"
-MAX_ROWS = 3080
-MODEL_NAME = "mistral:7b"
+MAX_ROWS = 3087
+MODEL_NAME = "llama3.2:3b"
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MLFLOW_EXPERIMENT_NAME = "FreeMind_Orchestrator"
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
-OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free"
-)
-OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
-OPENROUTER_APP_TITLE = os.environ.get("OPENROUTER_APP_TITLE", "FreeMind Orchestrator")
-
-
-def _default_openrouter_headers() -> Dict[str, str]:
-    return {
-        "HTTP-Referer": OPENROUTER_REFERER,
-        "X-Title": OPENROUTER_APP_TITLE,
-    }
 
 @dataclass
 class PipelineConfig:
@@ -47,7 +30,6 @@ class PipelineConfig:
     model_name: str = MODEL_NAME
     ollama_host: str = OLLAMA_HOST
     mlflow_experiment: str = MLFLOW_EXPERIMENT_NAME
-    llm_provider: str = "ollama"
     run_name: Optional[str] = None
     prompt_overrides: Optional[Dict[str, str]] = None
     enable_live_log: bool = True
@@ -66,40 +48,9 @@ class PipelineConfig:
     adaptive_mem_floor_timeout_sec: float = 8.0
     adaptive_mem_floor_slack_mb: int = 1024
     adaptive_mem_floor_min_mb: int = 1024
-    openrouter_base_url: str = OPENROUTER_BASE_URL
-    openrouter_api_key: Optional[str] = os.environ.get("OPENROUTER_API_KEY")
-    openrouter_model: str = OPENROUTER_MODEL
-    openrouter_headers: Dict[str, str] = field(default_factory=_default_openrouter_headers)
 
 def ensure_results_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
-
-
-def get_effective_model_name(config: PipelineConfig) -> str:
-    provider = (config.llm_provider or "ollama").lower()
-    if provider == "openrouter":
-        return config.openrouter_model or config.model_name
-    return config.model_name
-
-
-def invoke_model(prompt: str, config: PipelineConfig, timeout: int = 60) -> str:
-    provider = (config.llm_provider or "ollama").lower()
-    if provider == "openrouter":
-        return call_openrouter_chat(
-            config.openrouter_base_url,
-            config.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
-            config.openrouter_model or config.model_name,
-            prompt,
-            timeout=timeout,
-            headers=config.openrouter_headers,
-        )
-    return call_native_generate(
-        config.ollama_host,
-        config.model_name,
-        prompt,
-        options=config.ollama_options,
-        timeout=timeout,
-    )
 
 def load_prompts(overrides: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     with PROMPT_FILE.open("r", encoding="utf-8") as f:
@@ -118,7 +69,13 @@ def run_model_warmup(config: PipelineConfig) -> None:
     attempts = max(1, config.warmup_repeat)
     for idx in range(attempts):
         try:
-            invoke_model(prompt, config, timeout=30)
+            call_native_generate(
+                config.ollama_host,
+                config.model_name,
+                prompt,
+                options=config.ollama_options,
+                timeout=30,
+            )
         except Exception as exc:
             print(f"Warmup attempt {idx + 1}/{attempts} skipped: {exc}")
             break
@@ -286,10 +243,10 @@ class State(TypedDict, total=False):
 
 def build_pipeline(
     active_prompts: Dict[str, Dict[str, Any]],
-    config: PipelineConfig,
+    model_name: str,
+    ollama_host: str,
+    ollama_options: Optional[Dict[str, Any]] = None,
 ):
-    model_label = get_effective_model_name(config)
-
     def run_agent(state: State, agent_key: str, result_key: str):
         prompt_cfg = active_prompts[agent_key]
         clean_text = state.get("clean_text", "")
@@ -297,14 +254,15 @@ def build_pipeline(
 
         with start_span(
             name=f"{agent_key}_agent",
-            attributes={
-                "agent_key": agent_key,
-                "model_name": model_label,
-                "llm_provider": config.llm_provider,
-            },
+            attributes={"agent_key": agent_key, "model_name": model_name},
         ) as span:
-            span.set_inputs({"prompt": prompt, "model": model_label})
-            response = invoke_model(prompt, config)
+            span.set_inputs({"prompt": prompt, "model": model_name})
+            response = call_native_generate(
+                ollama_host,
+                model_name,
+                prompt,
+                options=ollama_options,
+            )
             span.set_outputs({"raw_response": response})
         return {result_key: response}
 
@@ -395,8 +353,7 @@ def run_pipeline(
     live_log_path = os.path.join(live_dir, f"live_run_{timestamp}.jsonl")
 
     prompts = load_prompts(config.prompt_overrides)
-    app = build_pipeline(prompts, config)
-    active_model_name = get_effective_model_name(config)
+    app = build_pipeline(prompts, config.model_name, config.ollama_host, config.ollama_options)
 
     mlflow.set_experiment(config.mlflow_experiment)
     mlflow.langchain.autolog()
@@ -452,9 +409,7 @@ def run_pipeline(
     log_entries: List[Dict[str, Any]] = []
     start_pipeline = time.time()
     print(f"=== FreeMind Orchestrator {run_name} ===")
-    print(
-        f"Input file: {config.input_csv} | Rows planned: {len(rows)} | Model: {active_model_name}"
-    )
+    print(f"Input file: {config.input_csv} | Rows planned: {len(rows)} | Model: {config.model_name}")
 
     mlflow_tags = {"run_name": run_name, **config.metadata_tags}
 
@@ -565,8 +520,7 @@ def run_pipeline(
             "rows_processed": len(log_entries),
             "total_duration_sec": round(total_duration, 2),
             "avg_sec_per_row": round(total_duration / len(log_entries), 2) if log_entries else 0,
-            "model": active_model_name,
-            "llm_provider": config.llm_provider,
+            "model": config.model_name,
             "experiment": config.mlflow_experiment,
             "output_files": {"log_csv": log_csv_path, "results_dir": config.results_dir},
             "watchdog_alerts": watchdog_alerts,

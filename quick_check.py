@@ -14,10 +14,6 @@ from langgraph.graph import StateGraph, START, END
 from utils_runtime import call_native_generate
 from judges.mlflow_judge import run_judge_on_log
 
-from freemind_env import load_environment
-
-load_environment()
-
 INPUT_CSV = os.path.join("data", "free tweet export.csv")
 OUTPUT_CSV: Optional[str] = None
 LOG_CSV: Optional[str] = None

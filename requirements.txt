@@ -8,5 +8,3 @@ plotly
 pynvml
 psutil
 dvc
-langchain
-python-dotenv

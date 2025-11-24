@@ -8,10 +8,6 @@ from pathlib import Path
 
 import mlflow
 
-from freemind_env import load_environment
-
-load_environment()
-
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
 
 def main() -> int:

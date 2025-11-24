@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,14 +14,6 @@ import mlflow
 import pandas as pd
 import streamlit as st
 from langgraph.graph import START, END, StateGraph
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
-from freemind_env import load_environment
-
-load_environment()
 
 RESULTS_DIR = Path("data/results")
 DEFAULT_RESULTS_PATH = RESULTS_DIR / "free tweet export_results.csv"

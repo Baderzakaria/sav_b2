@@ -10,10 +10,6 @@ from tqdm import tqdm
 
 import requests
 
-from freemind_env import load_environment
-
-load_environment()
-
 def build_prompt(text_value: str) -> str:
     return (
         "Analyze the sentiment of the following tweet. Return only JSON with key "
