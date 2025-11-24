@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { KpiCard } from '../components/ui/KpiCard';
 import { Users, Clock, AlertOctagon, CheckCircle, TrendingDown, Smile } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 import { useData } from '../context/DataContext';
 
 export const DashboardPage = () => {
@@ -214,7 +214,7 @@ export const DashboardPage = () => {
         <div className="bg-white p-6 rounded-2xl shadow-soft">
           <h3 className="text-lg font-bold text-gray-800 mb-6">Canaux de contact</h3>
           <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
-             {channelsData.length > 0 ? channelsData.map((channel, i) => (
+             {channelsData.length > 0 ? channelsData.map((channel) => (
                <div key={channel.name} className="flex items-center justify-between group">
                  <span className="text-gray-600 text-sm font-medium w-24 truncate" title={channel.name}>
                    {channel.name}

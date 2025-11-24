@@ -27,8 +27,7 @@ type ExternalRouteConfig = {
 
 export const EXTERNAL_ROUTES: ExternalRouteConfig[] = [
   { path: '/streamlit', label: 'Streamlit', url: STREAMLIT_URL, mode: 'embed' },
-  // MLflow sets `X-Frame-Options: deny`, so we open it in a dedicated tab instead of embedding.
-  { path: '/mlflow', label: 'MLflow', url: MLFLOW_URL, mode: 'redirect' },
+  { path: '/mlflow', label: 'MLflow', url: MLFLOW_URL, mode: 'embed' },
   { path: '/interface', label: 'Interface', url: INTERFACE_URL, mode: 'embed' },
 ];
 

@@ -1,5 +1,5 @@
-import { Ticket } from '../context/DataContext';
-import { AlertCircle, MessageCircle, TrendingUp, Heart, MessageSquare } from 'lucide-react';
+import { Ticket } from '../../context/DataContext';
+import { Heart, MessageSquare } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface TicketCardProps {

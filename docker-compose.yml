@@ -2,16 +2,12 @@ version: '3.9'
 
 services:
   mlflow:
-    image: ghcr.io/mlflow/mlflow:2.17.2
-    command: >
-      mlflow server --host 0.0.0.0 --port 5000
-      --backend-store-uri sqlite:////mlflow/mlflow.db
-      --default-artifact-root /mlflow/artifacts
+    build:
+      context: .
+      dockerfile: infra/mlflow.Dockerfile
     volumes:
       - mlflow_data:/mlflow
       - ./mlruns:/mlflow/artifacts
-    ports:
-      - "5000:5000"
 
   mlflow-proxy:
     image: nginx:alpine
@@ -42,7 +38,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: ["streamlit", "run", "apps/streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    command: ["python", "-m", "streamlit", "run", "/app/apps/streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
     volumes:

@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY orchestrator.py /app/
 COPY utils_runtime.py /app/
 COPY clean_gpu.py /app/
+COPY apps /app/apps
 COPY monitoring /app/monitoring
 COPY prompts /app/prompts
 # Also need data directory structure, maybe inputs
