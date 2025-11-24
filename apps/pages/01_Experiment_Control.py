@@ -23,6 +23,10 @@ from streamlit.runtime.scriptrunner import (
     get_script_run_ctx,
 )
 
+from freemind_env import load_environment
+
+load_environment()
+
 from monitoring.gpu_watchdog import capture_nvidia_smi, GPUWatcher
 from orchestrator import (
     PipelineConfig,
@@ -32,6 +36,11 @@ from orchestrator import (
     INPUT_CSV,
     RESULTS_DIR,
     MODEL_NAME,
+    MAX_ROWS,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+    OPENROUTER_REFERER,
+    OPENROUTER_APP_TITLE,
 )
 
 SESSION_LOCK = threading.Lock()
@@ -127,6 +136,12 @@ def init_session_state() -> None:
         "pipeline_status": "idle",
         "live_log_path": None,
         "jsonl_read_position": 0,
+        "config_llm_provider": "ollama",
+        "config_openrouter_model": OPENROUTER_MODEL,
+        "config_openrouter_base_url": OPENROUTER_BASE_URL,
+        "config_openrouter_api_key": os.environ.get("OPENROUTER_API_KEY", ""),
+        "config_openrouter_referer": OPENROUTER_REFERER,
+        "config_openrouter_title": OPENROUTER_APP_TITLE,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -715,28 +730,41 @@ def render_run_controls():
 
     available_models = get_ollama_models()
     current_model = st.session_state.get("config_model", MODEL_NAME)
+    current_provider = st.session_state.get("config_llm_provider", "ollama")
 
+    show_default_warning = False
     if not available_models:
+        if current_provider == "ollama":
+            show_default_warning = True
         available_models = ["llama3.2:3b", "mistral:latest", "llama3.1:8b"]
-        if st.session_state.get("ollama_models_warning_shown", False) == False:
-            st.warning("⚠️ Could not fetch models from Ollama. Using default presets. Make sure Ollama is running and 'ollama ls' works.")
-            st.session_state.ollama_models_warning_shown = True
 
-    if current_model in available_models:
-        default_choice = current_model
-    else:
-        default_choice = available_models[0] if available_models else "Custom"
+    if current_provider == "ollama":
+        refresh_cols = st.columns([5, 1])
+        with refresh_cols[1]:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔄 Refresh Models", use_container_width=True, help="Refresh model list from 'ollama ls'"):
+                if "cached_ollama_models" in st.session_state:
+                    del st.session_state.cached_ollama_models
+                st.rerun()
 
-    model_col1, model_col2 = st.columns([4, 1])
-    with model_col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh", use_container_width=True, help="Refresh model list from 'ollama ls'"):
+    if show_default_warning and not st.session_state.get("ollama_models_warning_shown", False):
+        st.warning("⚠️ Could not fetch models from Ollama. Using default presets. Make sure Ollama is running and 'ollama ls' works.")
+        st.session_state.ollama_models_warning_shown = True
 
-            if "cached_ollama_models" in st.session_state:
-                del st.session_state.cached_ollama_models
-            st.rerun()
+    provider_options = ["ollama", "openrouter"]
+    default_provider = current_provider if current_provider in provider_options else "ollama"
+    default_provider_index = provider_options.index(default_provider)
 
     with st.form("run_control_form"):
+        provider_choice = st.selectbox(
+            "LLM Provider",
+            options=provider_options,
+            index=default_provider_index,
+            key="config_llm_provider_select",
+            help="Choose between local Ollama models or OpenRouter-hosted models.",
+        )
+        st.session_state.config_llm_provider = provider_choice
+
         st.text_input("Input CSV", key="config_input_csv", value=st.session_state.get("config_input_csv", INPUT_CSV))
         st.number_input(
             "Number of tweets",
@@ -745,34 +773,68 @@ def render_run_controls():
             key="config_max_rows",
         )
 
-        model_options = available_models + ["Custom"]
-        try:
-            default_index = model_options.index(default_choice)
-        except ValueError:
-            default_index = 0
+        if provider_choice == "ollama":
+            model_options = available_models + ["Custom"]
+            default_choice = current_model if current_model in available_models else (available_models[0] if available_models else "Custom")
+            try:
+                default_index = model_options.index(default_choice)
+            except ValueError:
+                default_index = 0
 
-        model_choice = st.selectbox(
-            "🤖 Ollama Model",
-            options=model_options,
-            index=default_index,
-            key="config_model_choice",
-            help="Select from available Ollama models (fetched from 'ollama ls') or choose Custom to enter a model name manually.",
-        )
-
-        if model_choice == "Custom":
-            custom_default = current_model if current_model not in available_models else st.session_state.get("config_model_custom", "")
-            st.text_input(
-                "Custom model name",
-                key="config_model_custom",
-                value=custom_default,
-                help="Enter any Ollama model name (e.g., 'llama3.2:3b', 'mistral:latest')",
+            model_choice = st.selectbox(
+                "🤖 Ollama Model",
+                options=model_options,
+                index=default_index,
+                key="config_model_choice",
+                help="Select from available Ollama models (fetched from 'ollama ls') or choose Custom to enter a model name manually.",
             )
-            st.session_state.config_model = st.session_state.config_model_custom
-        else:
-            st.session_state.config_model = model_choice
 
-        if available_models:
-            st.caption(f"📋 Found {len(available_models)} model(s) from Ollama")
+            if model_choice == "Custom":
+                custom_default = current_model if current_model not in available_models else st.session_state.get("config_model_custom", "")
+                st.text_input(
+                    "Custom model name",
+                    key="config_model_custom",
+                    value=custom_default,
+                    help="Enter any Ollama model name (e.g., 'llama3.2:3b', 'mistral:latest')",
+                )
+                st.session_state.config_model = st.session_state.config_model_custom
+            else:
+                st.session_state.config_model = model_choice
+
+            if available_models:
+                st.caption(f"📋 Found {len(available_models)} model(s) from Ollama")
+        else:
+            st.text_input(
+                "OpenRouter Model ID",
+                key="config_openrouter_model",
+                value=st.session_state.get("config_openrouter_model", OPENROUTER_MODEL),
+                help="Use the model slug from openrouter.ai (e.g., mistralai/mistral-small-3.1-24b-instruct:free).",
+            )
+            st.text_input(
+                "OpenRouter API Key",
+                key="config_openrouter_api_key",
+                value=st.session_state.get("config_openrouter_api_key", ""),
+                type="password",
+                help="Stored only in this session state. Generate from openrouter.ai.",
+            )
+            st.text_input(
+                "OpenRouter Base URL",
+                key="config_openrouter_base_url",
+                value=st.session_state.get("config_openrouter_base_url", OPENROUTER_BASE_URL),
+            )
+            st.text_input(
+                "Leaderboard Referer (optional)",
+                key="config_openrouter_referer",
+                value=st.session_state.get("config_openrouter_referer", OPENROUTER_REFERER),
+                help="URL for OpenRouter rankings, leave blank if unsure.",
+            )
+            st.text_input(
+                "App Title (optional)",
+                key="config_openrouter_title",
+                value=st.session_state.get("config_openrouter_title", OPENROUTER_APP_TITLE),
+                help="Displayed on OpenRouter leaderboards.",
+            )
+            st.info("🔐 API key stays client-side in Streamlit session state. It will be provided with each call to OpenRouter.")
 
         st.toggle("Parallel agents (5)", key="config_parallel_agents", help="Agents already execute in parallel; toggle for bookkeeping.")
         start_clicked = st.form_submit_button("Launch Run", disabled=running)
@@ -780,23 +842,38 @@ def render_run_controls():
     if start_clicked:
         input_csv = (st.session_state.config_input_csv or "").strip() or INPUT_CSV
         max_rows = int(st.session_state.config_max_rows or MAX_ROWS)
-        model_name = st.session_state.config_model or MODEL_NAME
+        provider_choice = st.session_state.get("config_llm_provider", "ollama")
+        if provider_choice == "openrouter":
+            model_name = st.session_state.get("config_openrouter_model") or OPENROUTER_MODEL
+        else:
+            model_name = st.session_state.config_model or MODEL_NAME
         gpu_mem_floor = int(st.session_state.config_gpu_mem_floor or PipelineConfig.gpu_mem_floor_mb)
         gpu_temp = int(st.session_state.config_gpu_temp or PipelineConfig.gpu_temp_ceiling_c)
         gpu_threads = int(st.session_state.config_gpu_threads or PipelineConfig.gpu_watch_workers)
         gpu_poll = float(st.session_state.config_gpu_poll or PipelineConfig.gpu_poll_interval_sec)
 
+        openrouter_headers = {
+            "HTTP-Referer": st.session_state.get("config_openrouter_referer", OPENROUTER_REFERER),
+            "X-Title": st.session_state.get("config_openrouter_title", OPENROUTER_APP_TITLE),
+        }
+
         config = PipelineConfig(
             input_csv=input_csv,
             max_rows=max_rows,
             model_name=model_name,
+            llm_provider=provider_choice,
             gpu_mem_floor_mb=gpu_mem_floor,
             gpu_temp_ceiling_c=gpu_temp,
             gpu_watch_workers=gpu_threads,
             gpu_poll_interval_sec=gpu_poll,
+            openrouter_model=st.session_state.get("config_openrouter_model", OPENROUTER_MODEL),
+            openrouter_api_key=st.session_state.get("config_openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"),
+            openrouter_base_url=st.session_state.get("config_openrouter_base_url", OPENROUTER_BASE_URL),
+            openrouter_headers=openrouter_headers,
             metadata_tags={
                 "parallel_agents": st.session_state.config_parallel_agents,
                 "gpu_threads": gpu_threads,
+                "llm_provider": provider_choice,
             },
         )
         launch_pipeline(config)

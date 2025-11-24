@@ -158,3 +158,53 @@ Examples:
 
   python clean_gpu.py --kill-all --force
 
+""",
+    )
+
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show current GPU status and exit.",
+    )
+    parser.add_argument(
+        "--kill",
+        "--process-name",
+        dest="process_name",
+        metavar="NAME",
+        help="Kill all processes whose name contains NAME.",
+    )
+    parser.add_argument(
+        "--kill-all",
+        action="store_true",
+        help="Kill every process currently using GPU memory.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force kill (SIGKILL) instead of default SIGTERM.",
+    )
+
+    args = parser.parse_args()
+
+    action_taken = False
+
+    if args.status:
+        print_gpu_status()
+        action_taken = True
+
+    if args.kill_all or args.process_name:
+        killed = clean_gpu(
+            process_name=args.process_name,
+            kill_all=args.kill_all,
+            force=args.force,
+        )
+        print(f"Processes terminated: {killed}")
+        action_taken = True
+
+    if not action_taken:
+        print_gpu_status()
+        print("\nNo action specified. Use --help for options.")
+
+
+if __name__ == "__main__":
+    main()

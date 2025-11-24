@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import mlflow
 
 from utils_runtime import call_native_generate
+from freemind_env import load_environment
+
+load_environment()
 
 PROMPT_FILE = Path("prompts/freemind_prompts.json")
 DEFAULT_INPUT = Path("data/free tweet export.csv")

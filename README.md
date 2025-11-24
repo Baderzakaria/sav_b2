@@ -60,6 +60,15 @@ Les prompts sources sont versionnes dans `prompts/freemind_prompts.json` (regist
    - Historique des runs (à partir des `run_metadata_*.json`)
 4. **Evaluation/Prompts**: `python prompts/register_prompts.py` pour sync MLflow Prompt Registry, `python eval/run_prompt_eval.py` pour tester une variante.
 
+### Configuration `.env`
+
+- Créez un fichier `.env` à la racine (déjà présent dans ce repo) pour stocker les secrets:
+  ```
+  OPENROUTER_API_KEY=sk-...
+  SAV_PORTAL_URL=http://localhost:8501
+  ```
+- Le front-end lit `VITE_SAV_PORTAL_URL` (définissez-le dans `frontend/.env.local`) afin de rediriger les routes `/streamlit`, `/mlflow` et `/interface` vers le même portail (par défaut `http://localhost:8501`).
+
 ## Traçage MLflow
 
 - `mlflow.langchain.autolog()` + logs custom (JSON nettoye par tweet).
