@@ -2,7 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir mlflow==3.4.1
+RUN pip install --no-cache-dir mlflow==3.4.0
 
 EXPOSE 5000
 
