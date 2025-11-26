@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, START, END
 from mlflow.tracing.fluent import start_span
 
 from monitoring.gpu_watchdog import GPUWatcher, capture_nvidia_smi
-from utils_runtime import call_native_generate
+from utils_runtime import call_llm
 
 INPUT_CSV = "data/cleaned/free_tweet_export-latest.csv"
 RESULTS_DIR = "data/results"
@@ -70,12 +70,11 @@ def run_model_warmup(config: PipelineConfig) -> None:
     attempts = max(1, config.warmup_repeat)
     for idx in range(attempts):
         try:
-            call_native_generate(
-                config.ollama_host,
-                config.model_name,
+            call_llm(
                 prompt,
+                config.model_name,
+                host=config.ollama_host,
                 options=config.ollama_options,
-                timeout=30,
             )
         except Exception as exc:
             print(f"Warmup attempt {idx + 1}/{attempts} skipped: {exc}")
@@ -258,10 +257,10 @@ def build_pipeline(
             attributes={"agent_key": agent_key, "model_name": model_name},
         ) as span:
             span.set_inputs({"prompt": prompt, "model": model_name})
-            response = call_native_generate(
-                ollama_host,
-                model_name,
+            response = call_llm(
                 prompt,
+                model_name,
+                host=ollama_host,
                 options=ollama_options,
             )
             span.set_outputs({"raw_response": response})
