@@ -11,8 +11,11 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     environment:
-      - OLLAMA_HOST=http://host.docker.internal:11434
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=meta-llama/llama-3.2-3b-instruct:free
+      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
     volumes:
       - ./data:/app/data
       - ./prompts:/app/prompts
