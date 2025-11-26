@@ -1,0 +1,10 @@
+{
+  "utile": true,
+  "categorie": "probleme",
+  "sentiment": "frustration",
+  "type_probleme": {
+    " type_probleme ": "panne"
+  },
+  "score_gravite": -4,
+  "status": "success"
+}
