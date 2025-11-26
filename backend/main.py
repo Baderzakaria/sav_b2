@@ -21,7 +21,7 @@ from orchestrator import PipelineConfig, run_pipeline, build_pipeline, load_prom
 app = FastAPI()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LATEST_RESULTS_FILE = PROJECT_ROOT / "data" / "resullts" / "freemind_log_latest.csv"
+LATEST_RESULTS_FILE = PROJECT_ROOT / "data" / "results" / "freemind_log_latest.csv"
 
 app.add_middleware(
     CORSMiddleware,
