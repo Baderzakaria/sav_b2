@@ -53,7 +53,10 @@ def call_openrouter(prompt: str, model: Optional[str] = None, options: Optional[
     }
 
     resp = requests.post(f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers, timeout=60)
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(
+            f"OpenRouter API error {resp.status_code}: {resp.text[:400]}"
+        )
     data = resp.json()
     return data["choices"][0]["message"]["content"]
 
@@ -65,7 +68,8 @@ def call_llm(prompt: str, model: str, *, host: Optional[str] = None, options: Op
     """
 
     if OPENROUTER_API_KEY:
-        return call_openrouter(prompt, model=model, options=options)
+        openrouter_model = model if model and "/" in model else None
+        return call_openrouter(prompt, model=openrouter_model, options=options)
 
     return call_native_generate(host or DEFAULT_OLLAMA_HOST, model, prompt, options=options)
 
