@@ -1,0 +1,14 @@
+artifact_uri: file:///home/bader/Desktop/sav_b2/mlruns/259192823144845565/99f52b89ca9a47298d08f339329868e1/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '259192823144845565'
+lifecycle_stage: active
+run_id: 99f52b89ca9a47298d08f339329868e1
+run_name: pipeline_1764142521
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1764142522772
+status: 1
+tags: []
+user_id: bader

@@ -1,0 +1,8 @@
+{
+  "utile": true,
+  "categorie": "retour_client",
+  "sentiment": "satisfaction",
+  "type_probleme": "abonnement",
+  "score_gravite": 4,
+  "status": "success"
+}
