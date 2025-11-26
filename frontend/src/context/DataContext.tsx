@@ -1,4 +1,5 @@
-import { createContext, useContext, useMemo, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import { BACKEND_URL } from '../config/api';
 
 export interface AgentResponses {
   utile?: string;
@@ -47,10 +48,46 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const addTickets = (newTickets: Ticket[]) => {
     setTickets(prev => [...newTickets, ...prev]);
   };
+
+  useEffect(() => {
+    if (hasLoaded || tickets.length > 0) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const fetchLatestTickets = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/tickets/latest`, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load tickets (${response.status})`);
+        }
+
+        const payload: { tickets?: Ticket[] } = await response.json();
+        if (Array.isArray(payload.tickets) && payload.tickets.length > 0) {
+          setTickets(payload.tickets);
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+          return;
+        }
+        console.error('Unable to fetch latest tickets', error);
+      } finally {
+        setHasLoaded(true);
+      }
+    };
+
+    fetchLatestTickets();
+    return () => controller.abort();
+  }, [hasLoaded, tickets.length]);
 
   const satisfactionMetrics = useMemo(() => computeSatisfactionMetrics(tickets), [tickets]);
 

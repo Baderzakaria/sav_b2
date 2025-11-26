@@ -5,6 +5,7 @@ import { ImportPage } from './pages/ImportPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { UrgentPage } from './pages/UrgentPage';
 import { StatsPage } from './pages/StatsPage';
+import { InterfacePage } from './pages/InterfacePage';
 import { ChatWidget } from './components/chat/ChatWidget';
 import { DataProvider } from './context/DataContext';
 import { EXTERNAL_ROUTES } from './config/links';
@@ -25,6 +26,7 @@ function App() {
               <Route path="/urgent" element={<UrgentPage />} />
               <Route path="/stats" element={<StatsPage />} />
               <Route path="/import" element={<ImportPage />} />
+              <Route path="/interface" element={<InterfacePage />} />
               {EXTERNAL_ROUTES.map(({ path, label, url, mode = 'embed' }) => (
                 <Route
                   key={path}

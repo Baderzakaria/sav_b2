@@ -1,7 +1,4 @@
-const withDefault = (value: string | undefined, fallback: string) => {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallback;
-};
+import { withDefault } from './env';
 
 export const STREAMLIT_URL = withDefault(
   import.meta.env.VITE_STREAMLIT_URL as string | undefined,
@@ -28,6 +25,5 @@ type ExternalRouteConfig = {
 export const EXTERNAL_ROUTES: ExternalRouteConfig[] = [
   { path: '/streamlit', label: 'Streamlit', url: STREAMLIT_URL, mode: 'embed' },
   { path: '/mlflow', label: 'MLflow', url: MLFLOW_URL, mode: 'embed' },
-  { path: '/interface', label: 'Interface', url: INTERFACE_URL, mode: 'embed' },
 ];
 
