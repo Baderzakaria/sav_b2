@@ -1,0 +1,14 @@
+artifact_uri: file:///home/bader/Desktop/sav_b2/mlruns/844163921239272139/2da8cff7dd534961a52f0362d60ce654/artifacts
+end_time: 1763481789484
+entry_point_name: ''
+experiment_id: '844163921239272139'
+lifecycle_stage: active
+run_id: 2da8cff7dd534961a52f0362d60ce654
+run_name: register_prompts
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763481789449
+status: 3
+tags: []
+user_id: bader

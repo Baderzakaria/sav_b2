@@ -1,0 +1,8 @@
+{
+  "utile": false,
+  "categorie": "probleme",
+  "sentiment": "neutral",
+  "type_probleme": null,
+  "score_gravite": 0,
+  "status": "success/error"
+}

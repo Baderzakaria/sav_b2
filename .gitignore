@@ -2,9 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
 # C extensions
 *.so
-/mlruns/*
+
 # Distribution / packaging
 .Python
 build/
@@ -150,8 +151,9 @@ ollama_models/
 models/
 ollama_cache/
 
-# MLflow
-mlruns/
+# MLflow - keep mlruns but ignore files with colons (Windows incompatible)
+# mlruns/ is tracked for history/logs, but metrics with model names containing ":" are excluded
+mlruns/**/metrics/*:*
 mlartifacts/
 
 # Data files (optional - uncomment if needed)
@@ -169,8 +171,7 @@ secrets/
 *.key
 config.local.*
 
-# Experiment artifacts
-mlruns/
+# Experiment artifacts - already handled above
 
 # Frontend build artifacts
 /frontend/node_modules/
