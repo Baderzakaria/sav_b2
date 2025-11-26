@@ -1,8 +1,0 @@
-{
-  "utile": false,
-  "categorie": "retour_client",
-  "sentiment": "positive",
-  "type_probleme": "facturation",
-  "score_gravite": -5,
-  "status": "success/error"
-}

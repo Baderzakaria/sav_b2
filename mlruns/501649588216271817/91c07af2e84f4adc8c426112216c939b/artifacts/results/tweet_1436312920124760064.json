@@ -1,4 +1,0 @@
-{
-  "status": "error",
-  "raw_response": "The final consolidated result is:\n\n{\n\"utile\": true,\ncategorie\": \"probleme\",\n\"s sentiment\": \"satisfaction\",\n\"type_probleme\": \"abonnement\",\n\"score_gravite\": 0,\n\"status\": \"success\"\n}\n\nExplanation:\n- 'utile' is true because gravity near 0 does not match with the given JSON Response: utile false.\n- 'categorie': \"probleme\".\n- 'sentiment': \"satisfaction\".\n- 'type_probleme': \"abonnement\".\n- 'score_gravite': 0.\n- 'status': \"success\"."
-}

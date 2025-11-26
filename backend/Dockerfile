@@ -31,5 +31,5 @@ COPY backend /app/backend
 EXPOSE 8000
 
 # Command to run the backend
-# Use PORT environment variable (Railway sets this automatically)
+# Use PORT environment variable (defaults to 8000)
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
