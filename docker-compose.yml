@@ -46,13 +46,15 @@ services:
       - backend
       - streamlit
 
-  # Main gateway - single entry point on port 80
+  # Main gateway - single entry point with HTTPS
   gateway:
     image: nginx:alpine
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./infra/nginx-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - frontend
       - backend
