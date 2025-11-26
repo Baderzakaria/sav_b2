@@ -150,6 +150,10 @@ ollama_models/
 models/
 ollama_cache/
 
+# MLflow
+mlruns/
+mlartifacts/
+
 # Data files (optional - uncomment if needed)
 # *.csv
 # *.json
