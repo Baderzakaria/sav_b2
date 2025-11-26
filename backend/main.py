@@ -26,10 +26,6 @@ app.add_middleware(
 
 logger = logging.getLogger("uvicorn")
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
 @app.get("/run-orchestrator")
 async def run_orchestrator(request: Request):
     """

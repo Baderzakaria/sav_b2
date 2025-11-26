@@ -6,8 +6,7 @@ services:
       context: .
       dockerfile: infra/mlflow.Dockerfile
     volumes:
-      - mlflow_data:/mlflow
-      - ./mlruns:/mlflow/artifacts
+      - ./mlruns:/mlruns
 
   mlflow-proxy:
     image: nginx:alpine
@@ -65,5 +64,3 @@ services:
       - mlflow-proxy
       - streamlit
 
-volumes:
-  mlflow_data:
