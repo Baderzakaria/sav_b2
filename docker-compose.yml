@@ -53,10 +53,10 @@ services:
     build:
       context: frontend
       args:
-        VITE_BACKEND_URL: http://localhost:8000
-        VITE_MLFLOW_URL: http://localhost:5050
-        VITE_STREAMLIT_URL: http://localhost:8501
-        VITE_INTERFACE_URL: http://localhost:8501
+        VITE_BACKEND_URL: http://13.37.41.241:8000
+        VITE_MLFLOW_URL: http://13.37.41.241:5050
+        VITE_STREAMLIT_URL: http://13.37.41.241:8501
+        VITE_INTERFACE_URL: http://13.37.41.241:8501
     ports:
       - "4173:80"
     depends_on:
